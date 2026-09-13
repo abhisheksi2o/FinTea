@@ -477,8 +477,11 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
     bt.scalar("beta_tax", "Tax rate", a("tax_rate"), "pct")
     bt.scalar("beta_de_current", "Current market debt / equity", K(WACC, "de_current"), "factor", basis="From WACC sheet")
     bt.scalar("beta_de_target", "Target debt / equity", K(WACC, "de_target"), "factor", basis="From WACC sheet")
-    bt.scalar("beta_levered_input", "Levered beta used (raw or Blume-adjusted per Assumptions)",
-              IF(EQ(a("use_blume"), 1), K(BETA, "adj_beta"), K(BETA, "raw_beta")), "beta")
+    bt.scalar("beta_fallback", "Regression unusable (1 = fewer than 24 observations or beta outside -1..4): use beta of 1.0",
+              IF(OR(LT(K(BETA, "n_obs"), 24), LT(K(BETA, "raw_beta"), -1), GT(K(BETA, "raw_beta"), 4)), 1, 0), "int",
+              basis="Guards against shells, re-listings and thin trading histories producing absurd betas")
+    bt.scalar("beta_levered_input", "Levered beta used (raw or Blume-adjusted per Assumptions; 1.0 if regression unusable)",
+              IF(EQ(K(BETA, "beta_fallback"), 1), 1, IF(EQ(a("use_blume"), 1), K(BETA, "adj_beta"), K(BETA, "raw_beta"))), "beta")
     bt.scalar("unlevered_beta", "Unlevered (asset) beta", K(BETA, "beta_levered_input") / (1 + (1 - K(BETA, "beta_tax")) * K(BETA, "beta_de_current")),
               "beta", basis="Levered beta / (1 + (1 - t) x D/E)")
     bt.scalar("selected_beta", "Relevered beta at target structure (used in WACC)",
@@ -765,6 +768,8 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
           "High leverage should be reflected in the cost of debt and target capital structure.")
     check("chk_r2", "Beta regression R-squared", K(BETA, "r_squared"), "factor", ">= 0.10", GE(K(BETA, "r_squared"), 0.10),
           "A low R-squared means the index explains little of the stock's moves; consider a peer/industry beta.")
+    check("chk_beta_usable", "Regression beta usable (fallback to 1.0 not triggered)", K(BETA, "raw_beta"), "beta", "-1 to 4, n >= 24",
+          EQ(K(BETA, "beta_fallback"), 0), "An extreme regression beta usually reflects a re-listing, a shell company or thin trading; the model then uses a market beta of 1.0.")
     check("chk_nobs", "Beta regression observations", K(BETA, "n_obs"), "int", ">= 36", GE(K(BETA, "n_obs"), 36),
           "Fewer than three years of monthly returns gives an unstable beta.")
     check("chk_upside", "Implied upside / (downside) vs market price", K(DCF, "upside"), "pct", "within +/-50%",

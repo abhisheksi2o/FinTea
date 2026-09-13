@@ -124,6 +124,9 @@ def build_feedback(book: Book, ds: FinancialDataset, A: Assumptions, L: int, P: 
     if implied is not None and implied <= 0:
         pts.append("The implied equity value is negative: on these assumptions the projected unlevered cash flows do not cover net debt. "
                    "A mechanical DCF is not meaningful here; a turnaround scenario, a sum-of-the-parts or a multiples approach is needed.")
+    if g(BETA, "beta_fallback") == 1:
+        pts.append(f"The regression beta ({beta_raw:.2f} over {int(nobs)} observations) is not usable, so the cost of equity uses a market beta of 1.0; "
+                   "consider a bottom-up industry beta.")
     if r2 is not None and r2 < 0.1:
         pts.append("The regression beta has low explanatory power; a bottom-up industry beta would be a sensible cross-check.")
     if upside is not None and abs(upside) > 0.5:

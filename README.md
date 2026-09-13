@@ -4,7 +4,7 @@ Type a company name or ticker and get a complete, formula-driven, investment-ban
 financial model as a downloadable Excel workbook - plus an interactive preview, editable
 assumptions and quantitative / qualitative feedback.
 
-**Live site (GitHub Pages): https://abhisheksi2o.github.io/FinTea/** - about 2,000 companies pre-built
+**Live site (GitHub Pages): https://abhisheksi2o.github.io/FinTea/** - about 2,450 companies pre-built
 and refreshed nightly: every NIFTY Total Market constituent in India plus the S&P 500, FTSE 100/250,
 EURO STOXX 50, DAX, CAC 40, Nikkei 225, Hang Seng, S&P/TSX 60, S&P/ASX 200, Straits Times and
 KOSPI 200. Edit assumptions and the model recalculates in your browser; download writes the Excel file.

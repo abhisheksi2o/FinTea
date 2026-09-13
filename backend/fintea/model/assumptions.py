@@ -246,7 +246,11 @@ def derive_assumptions(ds: FinancialDataset, years: int = 5,
     # ---- operating drivers ----
     g_obs = [rev[i] / rev[i - 1] - 1 for i in range(1, n) if rev[i - 1] > 0]
     if len(g_obs) >= 1:
-        cagr = (rev[L] / rev[max(0, L - 3)]) ** (1 / min(3, L)) - 1 if L > 0 and rev[max(0, L - 3)] > 0 else g_obs[-1]
+        base_i = max(0, L - 3)
+        if L > 0 and rev[base_i] > 0 and rev[L] > 0:   # both endpoints positive: a real CAGR exists
+            cagr = (rev[L] / rev[base_i]) ** (1 / min(3, L)) - 1
+        else:                                          # negative revenue (e.g. fair-value losses): use the last observed growth
+            cagr = g_obs[-1]
         start = _clamp(cagr, -0.2, 0.4)
         B["rev_growth"] = (f"Starts at the {min(3, L)}-year revenue CAGR ({_pct(cagr)}, clamped -20%..+40%) and fades linearly toward the terminal growth rate ({_pct(tg)}). "
                            f"Historical growth: " + ", ".join(f"FY{fy[i + 1]} {_pct(g)}" for i, g in enumerate(g_obs)) + ".")

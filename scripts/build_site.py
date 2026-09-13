@@ -69,11 +69,13 @@ def build_one(row: Dict[str, str], provider: str, years: int, verify: bool):
     try:
         ds, used = fetch_dataset(symbol, provider)
     except Exception as e:
-        if provider != "sample":
-            print(f"  live fetch failed ({str(e)[:100]}); trying snapshot", flush=True)
-            ds, used = fetch_dataset(symbol, "sample")
-        else:
+        if provider == "sample":
             raise
+        print(f"  live fetch failed ({str(e)[:100]}); trying snapshot", flush=True)
+        try:
+            ds, used = fetch_dataset(symbol, "sample")
+        except Exception:
+            raise RuntimeError(f"live fetch failed: {str(e)[:160]}") from e
     if row.get("sector") and not ds.profile.sector:
         ds.profile.sector = row["sector"]
     if row.get("country") and not ds.profile.country:
