@@ -741,8 +741,12 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
     check("chk_implied_mult", "Implied exit multiple from Gordon TV", K(DCF, "implied_exit_multiple"), "mult", "5x - 25x",
           AND(GE(K(DCF, "implied_exit_multiple"), 5), LE(K(DCF, "implied_exit_multiple"), 25)),
           "Cross-checks the perpetuity assumption against how businesses actually trade.")
-    hist_cagr = IFERROR((K(IS, "revenue", L) / K(IS, "revenue", 0)) ** (1 / max(L, 1)) - 1, 0)
-    proj_cagr = IFERROR((K(IS, "revenue", pN) / K(IS, "revenue", L)) ** (1 / N) - 1, 0)
+    # only exponentiate positive ratios: a negative base with a fractional power is #NUM! in Excel but a real
+    # odd root in LibreOffice, so guarding keeps every engine identical when revenue turns negative
+    hist_cagr = IF(AND(GT(K(IS, "revenue", L), 0), GT(K(IS, "revenue", 0), 0)),
+                   (K(IS, "revenue", L) / K(IS, "revenue", 0)) ** (1 / max(L, 1)) - 1, 0)
+    proj_cagr = IF(AND(GT(K(IS, "revenue", pN), 0), GT(K(IS, "revenue", L), 0)),
+                   (K(IS, "revenue", pN) / K(IS, "revenue", L)) ** (1 / N) - 1, 0)
     check("chk_growth", "Projected revenue CAGR minus historical CAGR", proj_cagr - hist_cagr, "pct", "<= +5.0pp",
           LE(proj_cagr - hist_cagr, 0.05), "Forecasting acceleration well above the track record needs a clear justification.")
     check("chk_margin", "EBITDA margin expansion (terminal year vs base year)", K(IS, "m_ebitda_margin", pN) - K(IS, "m_ebitda_margin", L), "pct",

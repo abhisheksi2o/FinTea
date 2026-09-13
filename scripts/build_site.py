@@ -83,6 +83,8 @@ def build_one(row: Dict[str, str], provider: str, years: int, verify: bool):
         ds.notes.append("Sector classified as financial services: a free-cash-flow-to-firm DCF is not the right tool for banks, "
                         "insurers or REITs (their debt is operating, not financing). Treat the valuation as indicative only.")
     res = build_model(ds, years=years)
+    if res.summary.get("implied_price") is None or res.summary.get("error_cells"):
+        raise ValueError(f"model has error cells: {res.summary.get('error_cells')} (e.g. zero shares, missing statements)")
     ver: Dict[str, Any] = {"status": "skipped", "reason": "sampled verification (this company was not in the sample)", "cells_checked": 0, "mismatches": []}
     if verify:
         xlsx = write_workbook(res.book)
@@ -124,8 +126,10 @@ def build_shard(rows: List[Dict[str, str]], out: Path, provider: str, years: int
         with gzip.open(models / f"{sym}.json.gz", "wt", encoding="utf-8", compresslevel=6) as f:
             json.dump(payload, f, separators=(",", ":"), default=str)
         index.append(entry)
-        print(f"[{i}/{len(rows)}] {sym}: implied {entry['implied_price']:.2f} vs {entry['price']:.2f} {entry['currency']}, "
+        print(f"[{i}/{len(rows)}] {sym}: implied {entry['implied_price']:,.2f} vs {entry['price']:,.2f} {entry['currency']}, "
               f"{entry['verification']} in {time.time() - t0:.1f}s", flush=True)
+        if entry["verification"] == "mismatch":
+            print(f"  VERIFICATION MISMATCH: {json.dumps(payload['verification'].get('mismatches', [])[:3])[:600]}", flush=True)
         if provider != "sample":
             time.sleep(sleep)
     (out / "shards" / f"{shard_name}.json").write_text(json.dumps({"models": index, "failures": failures}, default=str))
