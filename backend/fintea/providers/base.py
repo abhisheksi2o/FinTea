@@ -80,6 +80,9 @@ class MarketSnapshot:
     risk_free_source: str = ""
     index_symbol: str = "^GSPC"
     index_name: str = "S&P 500"
+    listing_currency: str = ""                   # currency the exchange quotes the share in (before conversion)
+    listing_price: Optional[float] = None        # quoted price in the listing currency
+    fx_rate: Optional[float] = None              # listing -> reporting currency rate applied to the price
 
     @property
     def market_cap(self) -> float:
@@ -203,6 +206,10 @@ INDEX_BY_SUFFIX = {
     "ST": ("^OMX", "OMX Stockholm 30"), "CO": ("^OMXC25", "OMX Copenhagen 25"), "OL": ("^OSEAX", "Oslo All Share"),
     "HE": ("^OMXH25", "OMX Helsinki 25"), "BR": ("^BFX", "BEL 20"), "VI": ("^ATX", "ATX"),
 }
+
+
+# Minor-unit quote currencies used by Yahoo (pence, cents, agorot) -> (major currency, divisor)
+MINOR_UNITS = {"GBp": ("GBP", 100.0), "GBX": ("GBP", 100.0), "ZAc": ("ZAR", 100.0), "ILA": ("ILS", 100.0)}
 
 
 def index_for_symbol(symbol: str) -> tuple[str, str]:

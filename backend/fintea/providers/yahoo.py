@@ -17,7 +17,9 @@ from typing import Dict, List, Optional
 
 import requests
 
-from .base import (CompanyProfile, DataProvider, FinancialDataset, FiscalPeriod, MarketSnapshot,
+from collections import Counter
+
+from .base import (MINOR_UNITS, CompanyProfile, DataProvider, FinancialDataset, FiscalPeriod, MarketSnapshot,
                    PriceSeries, ProviderError, SearchResult, align_monthly, index_for_symbol, now_iso)
 
 BASE = "https://query2.finance.yahoo.com"
@@ -171,7 +173,8 @@ class YahooProvider(DataProvider):
             raise ProviderError(f"Insufficient price history for {symbol} ({len(dates)} months)")
         return PriceSeries(symbol, name, dates[-61:], closes[-61:])
 
-    def _fundamentals(self, symbol: str) -> List[FiscalPeriod]:
+    def _fundamentals(self, symbol: str) -> tuple[List[FiscalPeriod], str]:
+        """Annual statements plus the currency the statements are reported in."""
         types = sorted({t for lst in FIELD_MAP.values() for t in lst})
         now = int(time.time())
         js = self._get(f"/ws/fundamentals-timeseries/v1/finance/timeseries/{requests.utils.quote(symbol)}",
@@ -179,12 +182,15 @@ class YahooProvider(DataProvider):
                         "period2": now + 86400, "merge": "false"})
         result = js.get("timeseries", {}).get("result") or []
         by_type: Dict[str, Dict[str, float]] = {}
+        currencies: Counter = Counter()
         for res in result:
             t = res["meta"]["type"][0]
             vals = {}
             for v in res.get(t) or []:
                 if v and v.get("reportedValue") and v["reportedValue"].get("raw") is not None:
                     vals[v["asOfDate"]] = float(v["reportedValue"]["raw"])
+                    if v.get("currencyCode") and t.endswith(("TotalRevenue", "TotalAssets", "NetIncome")):
+                        currencies[v["currencyCode"]] += 1
             by_type[t.replace("annual", "", 1)] = vals
         dates = sorted({d for t in FIELD_MAP["revenue"] for d in by_type.get(t, {})})
         periods: List[FiscalPeriod] = []
@@ -203,7 +209,21 @@ class YahooProvider(DataProvider):
             periods.append(FiscalPeriod(period_end=d, fields=fields, source_fields=src))
         if not periods:
             raise ProviderError(f"Yahoo Finance has no annual financial statements for {symbol}")
-        return periods[-6:]
+        stmt_ccy = currencies.most_common(1)[0][0] if currencies else ""
+        return periods[-6:], stmt_ccy
+
+    def _fx_rate(self, from_ccy: str, to_ccy: str) -> Optional[float]:
+        """Spot rate: 1 unit of from_ccy in to_ccy, via Yahoo FX quotes (tries both pair orders)."""
+        if from_ccy == to_ccy:
+            return 1.0
+        for sym, invert in ((f"{from_ccy}{to_ccy}=X", False), (f"{to_ccy}{from_ccy}=X", True)):
+            try:
+                px = self._chart(sym, "5d", "1d")["meta"].get("regularMarketPrice")
+                if px:
+                    return (1.0 / float(px)) if invert else float(px)
+            except Exception:
+                continue
+        return None
 
     def _risk_free(self) -> tuple[Optional[float], str]:
         try:
@@ -219,13 +239,14 @@ class YahooProvider(DataProvider):
         chart = self._chart(symbol, "1y", "1d")
         meta = chart["meta"]
         idx_sym, idx_name = index_for_symbol(symbol)
-        periods = self._fundamentals(symbol)
+        periods, stmt_ccy = self._fundamentals(symbol)
         stock = self._monthly_series(symbol, meta.get("longName") or symbol)
         index = self._monthly_series(idx_sym, idx_name)
         stock, index = align_monthly(stock, index)
         rf, rf_src = self._risk_free()
         notes: List[str] = []
         last = periods[-1]
+        stmt_ccy = stmt_ccy or ""
         shares = last.get("shares_outstanding") or last.get("diluted_shares")
         if shares is None:
             raise ProviderError(f"Share count unavailable for {symbol}")
@@ -233,14 +254,36 @@ class YahooProvider(DataProvider):
             notes.append("Shares outstanding proxied by diluted weighted-average shares of the latest fiscal year.")
         price_ts = meta.get("regularMarketTime")
         price_date = datetime.fromtimestamp(price_ts, tz=timezone.utc).strftime("%Y-%m-%d") if price_ts else now_iso()[:10]
-        currency = meta.get("currency") or "USD"
+        # --- currency alignment: the model runs in the reporting currency of the statements ---
+        listing_ccy = meta.get("currency") or "USD"
+        listing_price = float(meta["regularMarketPrice"])
+        price = listing_price
+        hi, lo = meta.get("fiftyTwoWeekHigh"), meta.get("fiftyTwoWeekLow")
+        if listing_ccy in MINOR_UNITS:
+            major, div = MINOR_UNITS[listing_ccy]
+            notes.append(f"Share price quoted in {listing_ccy} (minor units): {listing_price:,.2f} {listing_ccy} = {listing_price / div:,.2f} {major}.")
+            price, listing_ccy = price / div, major
+            hi, lo = (hi / div if hi else hi), (lo / div if lo else lo)
+        currency = stmt_ccy or listing_ccy
+        fx = None
+        if currency != listing_ccy:
+            fx = self._fx_rate(listing_ccy, currency)
+            if fx is None:
+                notes.append(f"WARNING: the share price is quoted in {listing_ccy} but the statements are in {currency} and no FX rate could be retrieved; "
+                             f"the price was left unconverted - override 'Current share price' in Assumptions.")
+            else:
+                notes.append(f"Statements are reported in {currency} while the share is quoted in {listing_ccy}: price {price:,.2f} {listing_ccy} "
+                             f"converted at {fx:,.4f} = {price * fx:,.2f} {currency}. If this listing is a depositary receipt (ADR/GDR), "
+                             f"adjust the implied value for the depositary share ratio.")
+                price, hi, lo = price * fx, (hi * fx if hi else hi), (lo * fx if lo else lo)
         profile = CompanyProfile(symbol=symbol, name=meta.get("longName") or meta.get("shortName") or symbol,
                                  exchange=meta.get("fullExchangeName") or meta.get("exchangeName") or "",
                                  currency=currency, fiscal_year_end_month=int(last.period_end[5:7]))
-        market = MarketSnapshot(price=float(meta["regularMarketPrice"]), price_date=price_date,
+        market = MarketSnapshot(price=price, price_date=price_date,
                                 shares_outstanding=float(shares), currency=currency,
-                                fifty_two_week_high=meta.get("fiftyTwoWeekHigh"), fifty_two_week_low=meta.get("fiftyTwoWeekLow"),
-                                risk_free_rate=rf, risk_free_source=rf_src, index_symbol=idx_sym, index_name=idx_name)
+                                fifty_two_week_high=hi, fifty_two_week_low=lo,
+                                risk_free_rate=rf, risk_free_source=rf_src, index_symbol=idx_sym, index_name=idx_name,
+                                listing_currency=listing_ccy, listing_price=listing_price, fx_rate=fx)
         if rf is None:
             notes.append("Risk-free rate could not be retrieved; a default of 4.0% is used - override in Assumptions.")
         if idx_sym != "^GSPC":

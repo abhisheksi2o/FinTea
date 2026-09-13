@@ -765,6 +765,8 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
           "Fewer than three years of monthly returns gives an unstable beta.")
     check("chk_upside", "Implied upside / (downside) vs market price", K(DCF, "upside"), "pct", "within +/-50%",
           LE(ABS(K(DCF, "upside")), 0.5), "A very large gap to the market usually means an assumption, not the market, is wrong.")
+    check("chk_equity_positive", "Implied equity value per share", K(DCF, "implied_price"), "price", "> 0",
+          GT(K(DCF, "implied_price"), 0), "A non-positive value means projected cash flows do not cover net debt; a mechanical DCF is not meaningful for turnaround or loss-making cases.")
     check("chk_wacc_range", "WACC", K(WACC, "wacc"), "pct2", "6% - 14%", AND(GE(K(WACC, "wacc"), 0.06), LE(K(WACC, "wacc"), 0.14)),
           "Discount rates outside this band are unusual for listed companies and worth a second look.")
     fb.blank()

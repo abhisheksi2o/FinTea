@@ -28,7 +28,8 @@ DEFAULT_TICKERS = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "ORCL", "ADBE", "CRM", "NFLX", "AMD", "INTC",
     "CSCO", "QCOM", "WMT", "COST", "HD", "MCD", "NKE", "KO", "PEP", "PG", "JNJ", "LLY", "MRK", "PFE", "ABBV", "UNH",
     "XOM", "CVX", "CAT", "BA", "HON", "GE", "UPS", "DIS", "T", "VZ",
-    "INFY.NS", "TCS.NS", "RELIANCE.NS", "ASML", "SAP", "NESN.SW", "TM", "SONY", "SHEL.L", "AZN.L", "ULVR.L", "TSM", "BABA",
+    "INFY.NS", "TCS.NS", "RELIANCE.NS", "HINDUNILVR.NS", "ASML.AS", "SAP.DE", "SIE.DE", "MC.PA", "NESN.SW", "NOVO-B.CO",
+    "SHEL.L", "AZN.L", "ULVR.L", "7203.T", "2330.TW", "9988.HK", "005930.KS",
 ]
 
 

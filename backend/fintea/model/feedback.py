@@ -116,6 +116,9 @@ def build_feedback(book: Book, ds: FinancialDataset, A: Assumptions, L: int, P: 
     if tv_share is not None:
         pts.append(f"Terminal value is {_p(tv_share)} of enterprise value. The Gordon growth terminal value implies an exit multiple of {_m(imp_mult)} EBITDA "
                    f"versus the current market multiple of {_m(mkt_mult)}.")
+    if implied is not None and implied <= 0:
+        pts.append("The implied equity value is negative: on these assumptions the projected unlevered cash flows do not cover net debt. "
+                   "A mechanical DCF is not meaningful here; a turnaround scenario, a sum-of-the-parts or a multiples approach is needed.")
     if r2 is not None and r2 < 0.1:
         pts.append("The regression beta has low explanatory power; a bottom-up industry beta would be a sensible cross-check.")
     if upside is not None and abs(upside) > 0.5:

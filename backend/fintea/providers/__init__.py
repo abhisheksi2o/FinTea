@@ -42,7 +42,7 @@ def load_dataset(query: str, provider_id: str = "yahoo") -> FinancialDataset:
     if hasattr(p, "resolve"):
         symbol = p.resolve(query).symbol  # type: ignore[attr-defined]
     else:
-        hits = p.search(query, limit=5)
+        hits = p.search(query, limit=50)
         if hits:
             exact = [h for h in hits if h.symbol.upper() == query.strip().upper()]
             symbol = (exact or hits)[0].symbol

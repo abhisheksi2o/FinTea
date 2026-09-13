@@ -30,6 +30,8 @@ class SampleProvider(DataProvider):
             ds = self._load(sym)
             if q in sym.lower() or q in ds.profile.name.lower():
                 out.append(SearchResult(sym, ds.profile.name, ds.profile.exchange))
+        # exact symbol first, then symbols starting with the query, then name matches
+        out.sort(key=lambda r: (r.symbol.lower() != q, not r.symbol.lower().startswith(q), r.symbol))
         return out[:limit]
 
     def _load(self, symbol: str) -> FinancialDataset:

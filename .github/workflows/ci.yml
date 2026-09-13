@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches-ignore: [claude/financial-modeling-builder-yue6tr, main]
+    branches-ignore: [claude/financial-modeling-builder-yue6tr, main, gh-pages]
 
 jobs:
   test:
