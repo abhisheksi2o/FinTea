@@ -20,9 +20,12 @@ import csv
 import gzip
 import hashlib
 import json
+import os
 import shutil
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +35,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from fintea.excel import verify_workbook, write_workbook  # noqa: E402
 from fintea.model import build_model  # noqa: E402
+from fintea.model.llm import SYSTEM as COMMENTARY_PROMPT, ai_commentary, commentary_key  # noqa: E402
 from fintea.providers import get_provider, load_dataset, normalize  # noqa: E402
 
 UNIVERSE = ROOT / "data" / "universe.csv"
@@ -106,27 +110,98 @@ def build_one(row: Dict[str, str], provider: str, years: int, verify: bool):
              "upside": res.summary["upside"], "wacc": res.summary["wacc"], "status": res.summary["overall_status"],
              "verification": ver["status"], "cells_checked": ver.get("cells_checked", 0), "provider": used,
              "generated": res.book.meta["generated"], "json": f"models/{symbol}.json.gz"}
-    return payload, entry
+    return payload, entry, res
+
+
+class Commentator:
+    """Generates AI commentary with Claude, reusing cached text while the valuation picture is unchanged."""
+
+    def __init__(self, cache_dir: Optional[Path], out_dir: Path, max_new: int):
+        self.enabled = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self.cache: Dict[str, Dict[str, Any]] = {}
+        if cache_dir and cache_dir.exists():
+            for p in cache_dir.glob("*.json"):
+                try:
+                    self.cache[p.stem] = json.loads(p.read_text())
+                except Exception:
+                    pass
+        self.out = out_dir / "commentary"
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.max_new, self.new, self.reused = max_new, 0, 0
+        self.lock = threading.Lock()
+        self.client = None
+        if self.enabled:
+            import anthropic
+            self.client = anthropic.Anthropic(max_retries=4)
+        self.pool = ThreadPoolExecutor(max_workers=4) if self.enabled else None
+        self.pending = []
+
+    def cached(self, symbol: str, key: str) -> Optional[Dict[str, Any]]:
+        c = self.cache.get(symbol)
+        if c and c.get("key") == key and c.get("status") == "ok" and c.get("text"):
+            return c
+        return None
+
+    def submit(self, symbol: str, res, payload_path: Path) -> None:
+        key = commentary_key(res.summary)
+        hit = self.cached(symbol, key)
+        if hit:
+            self.reused += 1
+            self._store(symbol, hit, payload_path)
+            return
+        if not self.enabled or self.new >= self.max_new:
+            return
+        self.new += 1
+
+        def work():
+            try:
+                c = ai_commentary(res, self.client)
+            except Exception as e:  # never fail the build because of commentary
+                c = {"status": "error", "error": str(e)[:200], "key": key}
+            self._store(symbol, c, payload_path)
+        self.pending.append(self.pool.submit(work))
+
+    def _store(self, symbol: str, c: Dict[str, Any], payload_path: Path) -> None:
+        c = dict(c)
+        c["generated"] = c.get("generated") or time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+        with self.lock:
+            (self.out / f"{symbol}.json").write_text(json.dumps(c))
+            if c.get("status") == "ok":  # embed into the model file so the site shows it immediately
+                with gzip.open(payload_path, "rt", encoding="utf-8") as f:
+                    payload = json.load(f)
+                payload["llm"] = c
+                with gzip.open(payload_path, "wt", encoding="utf-8", compresslevel=6) as f:
+                    json.dump(payload, f, separators=(",", ":"), default=str)
+
+    def wait(self) -> None:
+        for fut in self.pending:
+            fut.result()
+        if self.pool:
+            self.pool.shutdown()
 
 
 def build_shard(rows: List[Dict[str, str]], out: Path, provider: str, years: int, verify_fraction: float, sleep: float,
-                shard_name: str) -> None:
+                shard_name: str, commentary_cache: Optional[Path] = None, commentary_max: int = 400) -> None:
     models = out / "models"
     models.mkdir(parents=True, exist_ok=True)
     (out / "shards").mkdir(parents=True, exist_ok=True)
     index, failures = [], []
     t_start = time.time()
+    commentator = Commentator(commentary_cache, out, commentary_max)
+    print(f"AI commentary: {'enabled' if commentator.enabled else 'disabled (no ANTHROPIC_API_KEY)'}; "
+          f"{len(commentator.cache)} cached entries available", flush=True)
     for i, row in enumerate(rows, start=1):
         sym = row["symbol"]
         t0 = time.time()
         try:
-            payload, entry = build_one(row, provider, years, should_verify(sym, verify_fraction))
+            payload, entry, res = build_one(row, provider, years, should_verify(sym, verify_fraction))
         except Exception as e:
             print(f"[{i}/{len(rows)}] {sym}: FAILED {str(e)[:160]}", flush=True)
             failures.append({"symbol": sym, "name": row.get("name", ""), "error": str(e)[:200]})
             continue
         with gzip.open(models / f"{sym}.json.gz", "wt", encoding="utf-8", compresslevel=6) as f:
             json.dump(payload, f, separators=(",", ":"), default=str)
+        commentator.submit(sym, res, models / f"{sym}.json.gz")
         index.append(entry)
         print(f"[{i}/{len(rows)}] {sym}: implied {entry['implied_price']:,.2f} vs {entry['price']:,.2f} {entry['currency']}, "
               f"{entry['verification']} in {time.time() - t0:.1f}s", flush=True)
@@ -134,8 +209,10 @@ def build_shard(rows: List[Dict[str, str]], out: Path, provider: str, years: int
             print(f"  VERIFICATION MISMATCH: {json.dumps(payload['verification'].get('mismatches', [])[:3])[:600]}", flush=True)
         if provider != "sample":
             time.sleep(sleep)
+    commentator.wait()
     (out / "shards" / f"{shard_name}.json").write_text(json.dumps({"models": index, "failures": failures}, default=str))
-    print(f"shard {shard_name}: {len(index)} built, {len(failures)} failed in {(time.time() - t_start) / 60:.1f} min", flush=True)
+    print(f"shard {shard_name}: {len(index)} built, {len(failures)} failed, commentary {commentator.new} generated / "
+          f"{commentator.reused} reused, in {(time.time() - t_start) / 60:.1f} min", flush=True)
 
 
 def merge(out: Path, frontend_dist: Optional[Path]) -> int:
@@ -152,9 +229,12 @@ def merge(out: Path, frontend_dist: Optional[Path]) -> int:
             dedup.append(m)
     countries = sorted({m["country"] for m in dedup})
     indices = sorted({i.strip() for m in dedup for i in m["index"].split(";") if i.strip()})
+    n_comment = len(list((out / "commentary").glob("*.json"))) if (out / "commentary").exists() else 0
     (out / "index.json").write_text(json.dumps({
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "count": len(dedup),
-        "countries": countries, "indices": indices, "models": dedup, "failures": failures}, separators=(",", ":")))
+        "countries": countries, "indices": indices, "models": dedup, "failures": failures,
+        "commentary_count": n_comment, "commentary_prompt": COMMENTARY_PROMPT,
+        "commentary_model": os.environ.get("FINTEA_LLM_MODEL", "claude-opus-5")}, separators=(",", ":")))
     if frontend_dist and frontend_dist.exists():
         for item in frontend_dist.iterdir():
             dest = out / item.name
@@ -181,6 +261,8 @@ def main():
     ap.add_argument("--verify-fraction", type=float, default=0.1, help="share of companies verified with LibreOffice")
     ap.add_argument("--sleep", type=float, default=0.4, help="pause between live fetches (rate limits)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--commentary-cache", default="", help="folder with previously generated commentary/*.json")
+    ap.add_argument("--commentary-max", type=int, default=400, help="max new AI commentaries per shard run")
     args = ap.parse_args()
     out = Path(args.out)
     if args.merge:
@@ -197,7 +279,8 @@ def main():
         shard_name = str(i)
     if args.limit:
         rows = rows[: args.limit]
-    build_shard(rows, out, args.provider, args.years, args.verify_fraction, args.sleep, shard_name)
+    build_shard(rows, out, args.provider, args.years, args.verify_fraction, args.sleep, shard_name,
+                Path(args.commentary_cache) if args.commentary_cache else None, args.commentary_max)
     if not args.shard:
         merge(out, Path(args.frontend_dist) if args.frontend_dist else None)
 

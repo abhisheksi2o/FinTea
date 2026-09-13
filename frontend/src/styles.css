@@ -133,3 +133,9 @@ table.checks td.why { color: var(--muted); }
 .browse-search { flex: 1; min-width: 200px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
 .company-tag { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
 .company-tag.fin { color: #7f6000; background: #fff2cc; }
+
+.byok { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+.byok-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.byok-row input[type=password] { flex: 1; min-width: 240px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.byok-row label { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
+.bad-text { color: var(--bad); }

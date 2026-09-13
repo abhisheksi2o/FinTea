@@ -133,7 +133,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {tab === "Checks & feedback" && <FeedbackPanel feedback={model.feedback} verification={model.verification} llm={model.llm} />}
+            {tab === "Checks & feedback" && <FeedbackPanel feedback={model.feedback} verification={model.verification} llm={model.llm} model={model} />}
             {tab === "Edit assumptions" && <AssumptionsPanel items={model.assumptions.items} years={model.assumptions.years} labels={model.meta.labels} busy={busy} onRebuild={rebuild} staticMode={STATIC} />}
             {sheet && <SheetGrid key={sheet.name} sheet={sheet} />}
           </>

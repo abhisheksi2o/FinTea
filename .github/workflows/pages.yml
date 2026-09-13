@@ -56,8 +56,18 @@ jobs:
       - name: Install LibreOffice Calc (formula verification)
         run: sudo apt-get update -q && sudo apt-get install -y -q libreoffice-calc
       - run: pip install -r backend/requirements.txt
+      - name: Restore previously generated AI commentary from gh-pages
+        run: |
+          mkdir -p prev
+          if git fetch --depth=1 origin gh-pages 2>/dev/null; then
+            git --work-tree=prev checkout origin/gh-pages -- commentary 2>/dev/null || true
+          fi
+          echo "cached commentaries: $(ls prev/commentary 2>/dev/null | wc -l)"
       - name: Build and verify models (shard ${{ matrix.shard }} of ${{ env.SHARDS }})
-        run: python scripts/build_site.py --out site --shard ${{ matrix.shard }}/${{ env.SHARDS }} --verify-fraction 0.1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional: enables pre-generated AI commentary
+          FINTEA_LLM_MODEL: ${{ vars.FINTEA_LLM_MODEL || 'claude-opus-5' }}
+        run: python scripts/build_site.py --out site --shard ${{ matrix.shard }}/${{ env.SHARDS }} --verify-fraction 0.1 --commentary-cache prev/commentary
       - uses: actions/upload-artifact@v4
         with:
           name: models-${{ matrix.shard }}
