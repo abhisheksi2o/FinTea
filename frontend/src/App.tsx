@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, STATIC } from "./api";
+import { exportWorkbook, loadIndex, type SiteIndex } from "./staticMode";
 import { AssumptionsPanel } from "./components/AssumptionsPanel";
 import { FeedbackPanel } from "./components/FeedbackPanel";
 import { SearchBar } from "./components/SearchBar";
@@ -18,9 +19,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
   const [tab, setTab] = useState("Overview");
+  const [index, setIndex] = useState<SiteIndex | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     api.providers().then((r) => { setProviders(r.providers); setProvider(r.default); }).catch((e) => setError(String(e.message)));
+    if (STATIC) loadIndex().then(setIndex).catch((e) => setError(String(e.message)));
   }, []);
 
   useEffect(() => {
@@ -37,7 +41,20 @@ export default function App() {
     finally { setBusy(false); }
   };
   const build = (q: string) => run(() => api.build(q, provider, years));
-  const rebuild = (overrides: Record<string, unknown>, yrs: number) => { if (model) run(() => api.rebuild(model.id, overrides, yrs)); };
+  const rebuild = (overrides: Record<string, unknown>, yrs: number) => { if (model) run(() => api.rebuild(model, model.parent_id ?? model.id, overrides, yrs)); };
+  const downloadEdited = async () => {
+    if (!model) return;
+    setExporting(true);
+    try {
+      const blob = await exportWorkbook(model);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `FinTea_${model.summary.symbol}_model_${model.summary.base_year}_edited.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e: any) { setError(e.message ?? String(e)); }
+    finally { setExporting(false); }
+  };
 
   const PANELS = ["Overview", "Checks & feedback", "Edit assumptions"];
   const tabs = model ? [...PANELS, ...(model.sheets?.map((s) => s.name) ?? [])] : [];
@@ -50,7 +67,12 @@ export default function App() {
         <div className="brand-sub">Type a company. Get a fully linked three-statement DCF model in Excel - every number a formula, every assumption explained, every formula verified.</div>
       </header>
       <main>
-        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onBuild={build} />
+        {STATIC && (
+          <div className="static-banner">
+            <b>Static demo on GitHub Pages.</b> {index ? `${index.models.length} companies pre-built and verified (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Assumption edits are recalculated in your browser and can be downloaded as Excel. For live builds of any listed company, run the app from the <a href="https://github.com/abhisheksi2o/FinTea" target="_blank" rel="noreferrer">GitHub repository</a>.
+          </div>
+        )}
+        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onBuild={build} staticMode={STATIC} />
         {busy && (
           <div className="progress">
             <div className="spinner" />
@@ -66,8 +88,12 @@ export default function App() {
                 <div className="muted">{model.summary.source} · {model.summary.units} · historical {model.summary.labels[0]}–{model.summary.labels[model.meta.nh - 1]} · projections to {model.summary.labels[model.summary.labels.length - 1]}</div>
               </div>
               <div className="downloads">
-                <a className="button primary" href={model.download_url} download>Download Excel model</a>
-                {model.verification.status === "verified" && (
+                {model.client_generated ? (
+                  <button className="primary" onClick={downloadEdited} disabled={exporting}>{exporting ? "Writing workbook..." : "Download edited Excel model"}</button>
+                ) : (
+                  <a className="button primary" href={model.download_url} download>Download Excel model</a>
+                )}
+                {!STATIC && model.verification.status === "verified" && (
                   <a className="button" href={`${model.download_url}?recalculated=1`} download title="Same workbook re-saved with cached values so previews (mail, Drive, phone) show numbers without recalculating">Download with cached values</a>
                 )}
               </div>
@@ -79,7 +105,7 @@ export default function App() {
             {tab === "Overview" && (
               <div className="overview">
                 <div className={`status-line ${model.feedback.n_fail > 0 ? "fail" : model.feedback.n_flag > 0 ? "flag" : "pass"}`}>
-                  {model.feedback.status} · {model.verification.status === "verified" ? `${model.verification.cells_checked.toLocaleString()} formulas independently verified` : `formula verification ${model.verification.status}`}
+                  {model.feedback.status} · {model.verification.status === "verified" ? `${model.verification.cells_checked.toLocaleString()} formulas independently verified by LibreOffice` : model.verification.status === "browser" ? "recalculated in your browser from the verified base model" : `formula verification ${model.verification.status}`}
                 </div>
                 <div className="overview-cols">
                   <div>
@@ -105,9 +131,20 @@ export default function App() {
               </div>
             )}
             {tab === "Checks & feedback" && <FeedbackPanel feedback={model.feedback} verification={model.verification} llm={model.llm} />}
-            {tab === "Edit assumptions" && <AssumptionsPanel items={model.assumptions.items} years={model.assumptions.years} labels={model.meta.labels} busy={busy} onRebuild={rebuild} />}
+            {tab === "Edit assumptions" && <AssumptionsPanel items={model.assumptions.items} years={model.assumptions.years} labels={model.meta.labels} busy={busy} onRebuild={rebuild} staticMode={STATIC} />}
             {sheet && <SheetGrid key={sheet.name} sheet={sheet} />}
           </>
+        )}
+        {!model && !busy && STATIC && index && (
+          <div className="company-grid">
+            {index.models.map((m) => (
+              <button key={m.symbol} className="company" onClick={() => build(m.symbol)}>
+                <div className="company-sym">{m.symbol}</div>
+                <div className="company-name">{m.name}</div>
+                <div className={`company-up ${m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toFixed(2)} → {m.implied_price.toFixed(2)} ({(m.upside * 100).toFixed(0)}%)</div>
+              </button>
+            ))}
+          </div>
         )}
         {!model && !busy && (
           <div className="welcome">

@@ -3,12 +3,13 @@ export interface Provider { id: string; name: string; description: string; avail
 
 export interface Cell {
   c: number; v: number | string | boolean | null; fmt: string; s: string;
-  f?: string; err?: string; k?: string; b?: boolean; i?: number; n?: string;
+  f?: string; err?: string; k?: string; b?: boolean; i?: number; n?: string; hl?: string; w?: boolean;
 }
 export interface SheetRow { r: number; cells: Cell[] }
 export interface Sheet {
   name: string; max_row: number; max_col: number;
   col_widths: Record<string, number>; period_cols: Record<string, number>; rows: SheetRow[];
+  merges?: string[]; freeze?: string | null; tab_color?: string | null; row_heights?: Record<string, number>;
 }
 export interface AssumptionItem {
   key: string; label: string; section: string; fmt: string; kind: "scalar" | "vector";
@@ -28,5 +29,5 @@ export interface ModelResponse {
   assumptions: { years: number; items: AssumptionItem[] };
   feedback: Feedback; verification: Verification; meta: Record<string, any>;
   llm: { status: string; text?: string; model?: string; error?: string } | null;
-  download_url: string; sheets?: Sheet[];
+  download_url: string; sheets?: Sheet[]; static?: boolean; client_generated?: boolean; parent_id?: string;
 }

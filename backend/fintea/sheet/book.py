@@ -215,6 +215,10 @@ class Book:
                     d["i"] = cell.indent
                 if cell.note:
                     d["n"] = cell.note
+                if cell.hyperlink:
+                    d["hl"] = cell.hyperlink
+                if cell.wrap:
+                    d["w"] = True
                 rows.setdefault(r, []).append(d)
             out["sheets"].append({
                 "name": name,
@@ -222,6 +226,10 @@ class Book:
                 "max_col": sh.max_col,
                 "col_widths": {str(k): v for k, v in sh.col_widths.items()},
                 "period_cols": {str(k): v for k, v in sh.period_cols.items()},
+                "merges": list(sh.merges),
+                "freeze": sh.freeze,
+                "tab_color": sh.tab_color,
+                "row_heights": {str(k): v for k, v in sh.row_heights.items()},
                 "rows": [{"r": r, "cells": cells} for r, cells in sorted(rows.items())],
             })
         return out

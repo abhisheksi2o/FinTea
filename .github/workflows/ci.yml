@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [claude/financial-modeling-builder-yue6tr, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: sudo apt-get update -q && sudo apt-get install -y -q libreoffice-calc
+      - run: pip install -r backend/requirements.txt
+      - run: cd backend && python -m pytest -q
+      - run: cd frontend && npm ci --no-audit --no-fund && npm run build

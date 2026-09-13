@@ -117,3 +117,13 @@ table.checks td.why { color: var(--muted); }
 .welcome { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px 22px; margin-top: 18px; }
 .welcome li { line-height: 1.55; margin-bottom: 4px; }
 @media (max-width: 900px) { .search-row { flex-wrap: wrap; } .overview-cols { grid-template-columns: 1fr; } .asm-label { width: 40%; } }
+
+.static-banner { background: #fff8e1; border: 1px solid #f3d98b; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; line-height: 1.5; }
+.static-banner a { color: var(--blue); }
+.company-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; margin-top: 16px; }
+.company { text-align: left; padding: 10px 12px; border-radius: 8px; background: #fff; }
+.company:hover { border-color: var(--blue); box-shadow: 0 2px 8px rgba(46,117,182,0.15); }
+.company-sym { font-weight: 700; color: var(--navy); }
+.company-name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.company-up { font-size: 12px; margin-top: 4px; }
+.company-up.good { color: var(--good); } .company-up.bad { color: var(--bad); }

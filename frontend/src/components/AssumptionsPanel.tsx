@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AssumptionItem } from "../types";
 
-interface Props { items: AssumptionItem[]; years: number; labels: string[]; busy: boolean; onRebuild: (overrides: Record<string, unknown>, years: number) => void }
+interface Props { items: AssumptionItem[]; years: number; labels: string[]; busy: boolean; onRebuild: (overrides: Record<string, unknown>, years: number) => void; staticMode?: boolean }
 
 const isPct = (fmt: string) => fmt === "pct" || fmt === "pct2";
 const toDisplay = (v: number, fmt: string) => (isPct(fmt) ? +(v * 100).toFixed(fmt === "pct2" ? 3 : 2) : +v.toFixed(fmt === "num" ? 1 : 4));
 const fromDisplay = (v: number, fmt: string) => (isPct(fmt) ? v / 100 : v);
 const unit = (fmt: string) => (isPct(fmt) ? "%" : fmt === "mult" ? "x" : fmt === "days" ? "days" : "");
 
-export function AssumptionsPanel({ items, years, labels, busy, onRebuild }: Props) {
+export function AssumptionsPanel({ items, years, labels, busy, onRebuild, staticMode }: Props) {
   const [draft, setDraft] = useState<Record<string, number | number[]>>({});
   const [yrs, setYrs] = useState(years);
   useEffect(() => { setDraft({}); setYrs(years); }, [items, years]);
@@ -38,10 +38,10 @@ export function AssumptionsPanel({ items, years, labels, busy, onRebuild }: Prop
     <div className="assumptions">
       <div className="assumptions-toolbar">
         <div>
-          <b>Assumptions</b> - blue values are inputs. Edit any of them and rebuild; the Excel model and every sheet update. The basis column records how each default was derived.
+          <b>Assumptions</b> - blue values are inputs. Edit any of them and rebuild; {staticMode ? "every sheet is recalculated in your browser and the edited model can be downloaded as Excel (the written narrative stays as in the base case)" : "the Excel model and every sheet update"}. The basis column records how each default was derived.
         </div>
         <div className="toolbar-actions">
-          <label>Projection years <select value={yrs} onChange={(e) => setYrs(Number(e.target.value))}>{[3,4,5,6,7,8,9,10].map((y) => <option key={y} value={y}>{y}</option>)}</select></label>
+          <label>Projection years <select value={yrs} disabled={!!staticMode} title={staticMode ? "Changing the horizon needs a live build" : undefined} onChange={(e) => setYrs(Number(e.target.value))}>{[3,4,5,6,7,8,9,10].map((y) => <option key={y} value={y}>{y}</option>)}</select></label>
           <button onClick={() => { setDraft({}); setYrs(years); }} disabled={!dirty || busy}>Reset</button>
           <button className="primary" onClick={() => onRebuild(draft, yrs)} disabled={!dirty || busy}>{busy ? "Rebuilding..." : "Rebuild model"}</button>
         </div>
