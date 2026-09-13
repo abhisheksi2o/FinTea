@@ -31,8 +31,8 @@ def build_feedback(book: Book, ds: FinancialDataset, A: Assumptions, L: int, P: 
     g = lambda s, k, p=None: book.num(s, k, p)
 
     rev0, revL, revN = g(IS, "revenue", 0), g(IS, "revenue", L), g(IS, "revenue", pN)
-    hist_cagr = (revL / rev0) ** (1 / max(L, 1)) - 1 if rev0 and revL and rev0 > 0 else None
-    proj_cagr = (revN / revL) ** (1 / len(P)) - 1 if revL and revN and revL > 0 else None
+    hist_cagr = (revL / rev0) ** (1 / max(L, 1)) - 1 if rev0 and revL and rev0 > 0 and revL > 0 else None
+    proj_cagr = (revN / revL) ** (1 / len(P)) - 1 if revL and revN and revL > 0 and revN > 0 else None
     gm0, gmL, gmN = g(IS, "m_gross_margin", 0), g(IS, "m_gross_margin", L), g(IS, "m_gross_margin", pN)
     em0, emL, emN = g(IS, "m_ebitda_margin", 0), g(IS, "m_ebitda_margin", L), g(IS, "m_ebitda_margin", pN)
     nm = g(IS, "m_net_margin", L)
