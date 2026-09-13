@@ -37,7 +37,10 @@ jobs:
         env: { VITE_STATIC: "1" }
         run: npm ci --no-audit --no-fund && npm run build
       - uses: actions/upload-artifact@v4
-        with: { name: frontend-dist, path: frontend/dist, retention-days: 1 }
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
 
   build:
     needs: test
@@ -56,7 +59,10 @@ jobs:
       - name: Build and verify models (shard ${{ matrix.shard }} of ${{ env.SHARDS }})
         run: python scripts/build_site.py --out site --shard ${{ matrix.shard }}/${{ env.SHARDS }} --verify-fraction 0.1
       - uses: actions/upload-artifact@v4
-        with: { name: models-${{ matrix.shard }}, path: site, retention-days: 1 }
+        with:
+          name: models-${{ matrix.shard }}
+          path: site
+          retention-days: 1
 
   publish:
     needs: build
@@ -67,9 +73,14 @@ jobs:
         with: { python-version: "3.11" }
       - run: pip install -r backend/requirements.txt
       - uses: actions/download-artifact@v4
-        with: { name: frontend-dist, path: frontend/dist }
+        with:
+          name: frontend-dist
+          path: frontend/dist
       - uses: actions/download-artifact@v4
-        with: { pattern: models-*, path: site, merge-multiple: true }
+        with:
+          pattern: models-*
+          path: site
+          merge-multiple: true
       - name: Merge shard indexes and add the frontend
         run: python scripts/build_site.py --out site --merge --frontend-dist frontend/dist
       - name: Publish the site to the gh-pages branch (served by GitHub Pages)
