@@ -8,15 +8,31 @@ import type { AssumptionItem, ModelResponse, Provider, QuantCheck, SearchResult,
 
 export const STATIC = import.meta.env.VITE_STATIC === "1";
 
-export interface IndexEntry { symbol: string; name: string; currency: string; price: number; implied_price: number; upside: number; wacc: number; status: string; verification: string; cells_checked: number; provider: string; generated: string; json: string; xlsx: string }
-export interface SiteIndex { generated: string; models: IndexEntry[]; failures: { symbol: string; error: string }[] }
+export interface IndexEntry { symbol: string; name: string; country: string; index: string; sector: string; financial: boolean; currency: string; price: number; implied_price: number; upside: number; wacc: number; status: string; verification: string; cells_checked: number; provider: string; generated: string; json: string }
+export interface SiteIndex { generated: string; count: number; countries: string[]; indices: string[]; models: IndexEntry[]; failures: { symbol: string; name?: string; error: string }[] }
+
+/** Fetch a JSON document, transparently gunzipping *.json.gz (falls back to *.json). */
+export async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url, { cache: "no-cache" });
+  if (!r.ok) {
+    if (url.endsWith(".gz")) return fetchJson<T>(url.slice(0, -3));
+    throw new Error(`could not load ${url} (${r.status})`);
+  }
+  if (!url.endsWith(".gz")) return (await r.json()) as T;
+  const buf = new Uint8Array(await r.arrayBuffer());
+  const isGzip = buf[0] === 0x1f && buf[1] === 0x8b; // servers may already have decoded it
+  if (!isGzip) return JSON.parse(new TextDecoder().decode(buf)) as T;
+  if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot decompress model files; please use a current browser.");
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text()) as T;
+}
 
 let indexCache: SiteIndex | null = null;
 export async function loadIndex(): Promise<SiteIndex> {
   if (indexCache) return indexCache;
-  const r = await fetch("index.json", { cache: "no-cache" });
-  if (!r.ok) throw new Error("index.json not found - the static site has not been built");
-  indexCache = (await r.json()) as SiteIndex;
+  indexCache = await fetchJson<SiteIndex>("index.json");
+  indexCache.countries = indexCache.countries ?? Array.from(new Set(indexCache.models.map((m) => m.country))).sort();
+  indexCache.indices = indexCache.indices ?? [];
   return indexCache;
 }
 
@@ -25,18 +41,20 @@ export const staticProviders: Provider[] = [{ id: "static", name: "Pre-built mod
 export async function staticSearch(q: string): Promise<SearchResult[]> {
   const idx = await loadIndex();
   const s = q.trim().toLowerCase();
-  return idx.models.filter((m) => m.symbol.toLowerCase().includes(s) || m.name.toLowerCase().includes(s))
-    .map((m) => ({ symbol: m.symbol, name: m.name, exchange: m.currency, type: "EQUITY" })).slice(0, 10);
+  const hits = idx.models.filter((m) => m.symbol.toLowerCase().includes(s) || m.name.toLowerCase().includes(s));
+  hits.sort((a, b) => Number(b.symbol.toLowerCase().startsWith(s)) - Number(a.symbol.toLowerCase().startsWith(s)) || a.symbol.localeCompare(b.symbol));
+  return hits.map((m) => ({ symbol: m.symbol, name: m.name, exchange: `${m.country}${m.currency ? " · " + m.currency : ""}`, type: "EQUITY" })).slice(0, 12);
 }
 
 export async function staticBuild(query: string): Promise<ModelResponse> {
   const idx = await loadIndex();
   const q = query.trim().toLowerCase();
-  const hit = idx.models.find((m) => m.symbol.toLowerCase() === q) ?? idx.models.find((m) => m.symbol.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
-  if (!hit) throw new Error(`"${query}" is not among the ${idx.models.length} pre-built companies on this static site. Run FinTea locally (see the GitHub repository) to build any listed company live.`);
-  const r = await fetch(hit.json, { cache: "no-cache" });
-  if (!r.ok) throw new Error(`could not load ${hit.json}`);
-  return (await r.json()) as ModelResponse;
+  const hit = idx.models.find((m) => m.symbol.toLowerCase() === q) ?? idx.models.find((m) => m.symbol.toLowerCase().startsWith(q))
+    ?? idx.models.find((m) => m.name.toLowerCase().includes(q));
+  if (!hit) throw new Error(`"${query}" is not among the ${idx.models.length} pre-built companies on this site. Run FinTea locally (see the GitHub repository) to build any listed company live.`);
+  const model = await fetchJson<ModelResponse>(hit.json);
+  model.client_generated = true;
+  return model;
 }
 
 /** Apply overrides to the Assumptions sheet, recalculate everything in the browser and refresh summary + checks. */

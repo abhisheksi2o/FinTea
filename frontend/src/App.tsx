@@ -21,6 +21,9 @@ export default function App() {
   const [tab, setTab] = useState("Overview");
   const [index, setIndex] = useState<SiteIndex | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [country, setCountry] = useState("All");
+  const [idxFilter, setIdxFilter] = useState("All");
+  const [gridQuery, setGridQuery] = useState("");
 
   useEffect(() => {
     api.providers().then((r) => { setProviders(r.providers); setProvider(r.default); }).catch((e) => setError(String(e.message)));
@@ -49,7 +52,7 @@ export default function App() {
       const blob = await exportWorkbook(model);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `FinTea_${model.summary.symbol}_model_${model.summary.base_year}_edited.xlsx`;
+      a.download = `FinTea_${model.summary.symbol}_model_${model.summary.base_year}${model.parent_id ? "_edited" : ""}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     } catch (e: any) { setError(e.message ?? String(e)); }
@@ -69,7 +72,7 @@ export default function App() {
       <main>
         {STATIC && (
           <div className="static-banner">
-            <b>Static demo on GitHub Pages.</b> {index ? `${index.models.length} companies pre-built and verified (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Assumption edits are recalculated in your browser and can be downloaded as Excel. For live builds of any listed company, run the app from the <a href="https://github.com/abhisheksi2o/FinTea" target="_blank" rel="noreferrer">GitHub repository</a>.
+            <b>Hosted on GitHub Pages.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href="https://github.com/abhisheksi2o/FinTea" target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
         <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onBuild={build} staticMode={STATIC} />
@@ -89,7 +92,7 @@ export default function App() {
               </div>
               <div className="downloads">
                 {model.client_generated ? (
-                  <button className="primary" onClick={downloadEdited} disabled={exporting}>{exporting ? "Writing workbook..." : "Download edited Excel model"}</button>
+                  <button className="primary" onClick={downloadEdited} disabled={exporting}>{exporting ? "Writing workbook..." : (model.parent_id ? "Download edited Excel model" : "Download Excel model")}</button>
                 ) : (
                   <a className="button primary" href={model.download_url} download>Download Excel model</a>
                 )}
@@ -135,17 +138,37 @@ export default function App() {
             {sheet && <SheetGrid key={sheet.name} sheet={sheet} />}
           </>
         )}
-        {!model && !busy && STATIC && index && (
-          <div className="company-grid">
-            {index.models.map((m) => (
-              <button key={m.symbol} className="company" onClick={() => build(m.symbol)}>
-                <div className="company-sym">{m.symbol}</div>
-                <div className="company-name">{m.name}</div>
-                <div className={`company-up ${m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toFixed(2)} → {m.implied_price.toFixed(2)} ({(m.upside * 100).toFixed(0)}%)</div>
-              </button>
-            ))}
-          </div>
-        )}
+        {!model && !busy && STATIC && index && (() => {
+          const q = gridQuery.trim().toLowerCase();
+          const list = index.models.filter((m) => (country === "All" || m.country === country) && (idxFilter === "All" || m.index.includes(idxFilter))
+            && (!q || m.symbol.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || (m.sector ?? "").toLowerCase().includes(q)));
+          const shown = list.slice(0, 96);
+          return (
+            <div className="browse">
+              <div className="browse-bar">
+                <select value={country} onChange={(e) => setCountry(e.target.value)}>
+                  <option value="All">All markets ({index.models.length})</option>
+                  {index.countries.map((c) => <option key={c} value={c}>{c} ({index.models.filter((m) => m.country === c).length})</option>)}
+                </select>
+                <select value={idxFilter} onChange={(e) => setIdxFilter(e.target.value)}>
+                  <option value="All">All indices</option>
+                  {index.indices.map((i) => <option key={i} value={i}>{i}</option>)}
+                </select>
+                <input className="browse-search" placeholder="Filter by name, symbol or sector" value={gridQuery} onChange={(e) => setGridQuery(e.target.value)} />
+                <span className="muted">Showing {shown.length} of {list.length}</span>
+              </div>
+              <div className="company-grid">
+                {shown.map((m) => (
+                  <button key={m.symbol} className="company" onClick={() => build(m.symbol)} title={m.sector}>
+                    <div className="company-sym">{m.symbol} <span className="company-tag">{m.country}</span>{m.financial && <span className="company-tag fin">financial</span>}</div>
+                    <div className="company-name">{m.name}</div>
+                    <div className={`company-up ${m.implied_price > 0 && m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} → {m.implied_price.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({(m.upside * 100).toFixed(0)}%)</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         {!model && !busy && (
           <div className="welcome">
             <h3>How it works</h3>

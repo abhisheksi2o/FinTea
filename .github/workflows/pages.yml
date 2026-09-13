@@ -4,7 +4,7 @@ on:
   push:
     branches: [claude/financial-modeling-builder-yue6tr, main]
   schedule:
-    - cron: "30 2 * * *"   # nightly refresh of the pre-built models
+    - cron: "30 2 * * *"   # nightly refresh of every pre-built model
   workflow_dispatch:
 
 permissions:
@@ -14,39 +14,64 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  SHARDS: 12
+
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
       - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+        with: { node-version: "22", cache: npm, cache-dependency-path: frontend/package-lock.json }
       - name: Install LibreOffice Calc (formula verification)
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q libreoffice-calc
-      - name: Install Python dependencies
-        run: pip install -r backend/requirements.txt
+        run: sudo apt-get update -q && sudo apt-get install -y -q libreoffice-calc
+      - run: pip install -r backend/requirements.txt
       - name: Run tests (includes LibreOffice recalculation checks)
         working-directory: backend
         run: python -m pytest -q
       - name: Build static frontend
         working-directory: frontend
-        env:
-          VITE_STATIC: "1"
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-      - name: Build and verify models for the curated company list
-        run: python scripts/build_site.py --out site --frontend-dist frontend/dist
+        env: { VITE_STATIC: "1" }
+        run: npm ci --no-audit --no-fund && npm run build
+      - uses: actions/upload-artifact@v4
+        with: { name: frontend-dist, path: frontend/dist, retention-days: 1 }
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: backend/requirements.txt }
+      - name: Install LibreOffice Calc (formula verification)
+        run: sudo apt-get update -q && sudo apt-get install -y -q libreoffice-calc
+      - run: pip install -r backend/requirements.txt
+      - name: Build and verify models (shard ${{ matrix.shard }} of ${{ env.SHARDS }})
+        run: python scripts/build_site.py --out site --shard ${{ matrix.shard }}/${{ env.SHARDS }} --verify-fraction 0.1
+      - uses: actions/upload-artifact@v4
+        with: { name: models-${{ matrix.shard }}, path: site, retention-days: 1 }
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r backend/requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { name: frontend-dist, path: frontend/dist }
+      - uses: actions/download-artifact@v4
+        with: { pattern: models-*, path: site, merge-multiple: true }
+      - name: Merge shard indexes and add the frontend
+        run: python scripts/build_site.py --out site --merge --frontend-dist frontend/dist
       - name: Publish the site to the gh-pages branch (served by GitHub Pages)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

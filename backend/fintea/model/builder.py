@@ -14,7 +14,7 @@ from datetime import date, datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from ..providers.base import FIELD_LABELS, FinancialDataset
-from ..sheet import (ABS, AND, AVERAGE, CORREL, COUNT, COVAR, GE, GT, IF, IFERROR, INTERCEPT, LE, LT, MAX, MIN,
+from ..sheet import (ABS, AND, AVERAGE, CORREL, COUNT, COVAR, GE, GT, IF, IFERROR, INTERCEPT, LE, LT, MAX, MIN, OR,
                      RSQ, SLOPE, SQRT, STDEV, SUM, VARP, EQ, Book, CellRef, Expr, K, RangeK, RangeRef, FIRST_PERIOD_COL)
 from .assumptions import ASSUMPTION_SPECS, Assumptions, derive_assumptions
 
@@ -767,6 +767,11 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
           LE(ABS(K(DCF, "upside")), 0.5), "A very large gap to the market usually means an assumption, not the market, is wrong.")
     check("chk_equity_positive", "Implied equity value per share", K(DCF, "implied_price"), "price", "> 0",
           GT(K(DCF, "implied_price"), 0), "A non-positive value means projected cash flows do not cover net debt; a mechanical DCF is not meaningful for turnaround or loss-making cases.")
+    mcap_ratio = IFERROR(K(WACC, "market_cap") / K(BS, "total_equity", L), 0)
+    check("chk_mcap_book", f"Market cap / book equity (FY{base_year})", mcap_ratio, "mult", "0.02x - 1,000x or negative equity",
+          OR(LE(K(BS, "total_equity", L), 0), AND(GE(mcap_ratio, 0.02), LE(mcap_ratio, 1000))),
+          "A ratio far outside this band usually means the quoted price and the share count refer to different share classes "
+          "(e.g. Berkshire A vs B shares) or units - check 'Shares outstanding' in Assumptions.")
     check("chk_wacc_range", "WACC", K(WACC, "wacc"), "pct2", "6% - 14%", AND(GE(K(WACC, "wacc"), 0.06), LE(K(WACC, "wacc"), 0.14)),
           "Discount rates outside this band are unusual for listed companies and worth a second look.")
     fb.blank()

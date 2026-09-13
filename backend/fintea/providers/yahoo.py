@@ -92,6 +92,17 @@ class YahooProvider(DataProvider):
         self.session = session or requests.Session()
         self.session.headers.update(HEADERS)
         self.timeout = timeout
+        # benchmark index series, FX rates and the treasury yield are shared across companies:
+        # cache them for an hour so bulk builds make ~3 requests per company instead of 5-6
+        self._cache: Dict[str, tuple[float, object]] = {}
+
+    def _cached(self, key: str, fn, ttl: float = 3600.0):
+        hit = self._cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        val = fn()
+        self._cache[key] = (time.time(), val)
+        return val
 
     # -- http ----------------------------------------------------------------
     def _get(self, path: str, params: Optional[dict] = None, retries: int = 3) -> dict:
@@ -241,9 +252,9 @@ class YahooProvider(DataProvider):
         idx_sym, idx_name = index_for_symbol(symbol)
         periods, stmt_ccy = self._fundamentals(symbol)
         stock = self._monthly_series(symbol, meta.get("longName") or symbol)
-        index = self._monthly_series(idx_sym, idx_name)
+        index = self._cached(f"index:{idx_sym}", lambda: self._monthly_series(idx_sym, idx_name))
         stock, index = align_monthly(stock, index)
-        rf, rf_src = self._risk_free()
+        rf, rf_src = self._cached("rf", self._risk_free)
         notes: List[str] = []
         last = periods[-1]
         stmt_ccy = stmt_ccy or ""
@@ -267,7 +278,7 @@ class YahooProvider(DataProvider):
         currency = stmt_ccy or listing_ccy
         fx = None
         if currency != listing_ccy:
-            fx = self._fx_rate(listing_ccy, currency)
+            fx = self._cached(f"fx:{listing_ccy}{currency}", lambda: self._fx_rate(listing_ccy, currency))
             if fx is None:
                 notes.append(f"WARNING: the share price is quoted in {listing_ccy} but the statements are in {currency} and no FX rate could be retrieved; "
                              f"the price was left unconverted - override 'Current share price' in Assumptions.")

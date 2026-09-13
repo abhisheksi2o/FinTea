@@ -116,6 +116,11 @@ def build_feedback(book: Book, ds: FinancialDataset, A: Assumptions, L: int, P: 
     if tv_share is not None:
         pts.append(f"Terminal value is {_p(tv_share)} of enterprise value. The Gordon growth terminal value implies an exit multiple of {_m(imp_mult)} EBITDA "
                    f"versus the current market multiple of {_m(mkt_mult)}.")
+    mcap_book = g(FEED, "chk_mcap_book")
+    if mcap_book is not None and (mcap_book > 1000 or (0 < mcap_book < 0.02)):
+        pts.append("Market capitalisation is implausible relative to book equity: the quoted price and the reported share count probably "
+                   "refer to different share classes or units, so the per-share value is not comparable to the price. Override "
+                   "'Shares outstanding' with the count matching the quoted share class.")
     if implied is not None and implied <= 0:
         pts.append("The implied equity value is negative: on these assumptions the projected unlevered cash flows do not cover net debt. "
                    "A mechanical DCF is not meaningful here; a turnaround scenario, a sum-of-the-parts or a multiples approach is needed.")
@@ -133,6 +138,9 @@ def build_feedback(book: Book, ds: FinancialDataset, A: Assumptions, L: int, P: 
         pts.append("Capex is below D&A in the terminal year; steady-state reinvestment may be understated, flattering free cash flow.")
     if nd_ebitda is not None and nd_ebitda > 3:
         pts.append("Leverage above 3x EBITDA raises refinancing risk; the cost of debt assumption should include a credit spread consistent with the rating.")
+    if any(w in f"{ds.profile.sector} {ds.profile.industry}".lower() for w in ("bank", "financ", "insur", "reit")):
+        pts.append(f"Sector '{ds.profile.sector or ds.profile.industry}' is financial: interest-bearing liabilities are part of operations, so an "
+                   "FCFF DCF overstates or understates value; prefer a dividend-discount, excess-return or P/B-based approach.")
     if ds.profile.currency != "USD":
         pts.append("Statements are in a non-USD currency while the risk-free rate is the US 10-year yield; align the risk-free rate to the currency of the cash flows.")
     if n_flag:

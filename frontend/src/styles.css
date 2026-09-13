@@ -127,3 +127,9 @@ table.checks td.why { color: var(--muted); }
 .company-name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .company-up { font-size: 12px; margin-top: 4px; }
 .company-up.good { color: var(--good); } .company-up.bad { color: var(--bad); }
+
+.browse { margin-top: 16px; }
+.browse-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.browse-search { flex: 1; min-width: 200px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
+.company-tag { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--bg); border-radius: 8px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+.company-tag.fin { color: #7f6000; background: #fff2cc; }
