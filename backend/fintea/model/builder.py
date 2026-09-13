@@ -672,8 +672,11 @@ def build_model(ds: FinancialDataset, assumptions: Optional[Assumptions] = None,
     R("r_net_margin", "Net margin", lambda p: isr("net_income", p) / isr("revenue", p))
     R("r_roe", "Return on equity (ending equity)", lambda p: isr("net_income", p) / bsr("total_equity", p))
     R("r_roa", "Return on assets", lambda p: isr("net_income", p) / bsr("total_assets", p))
+    def invested_capital(p):
+        return bsr("total_debt", p) + bsr("total_equity", p) - bsr("cash_sti", p)
+    # near-zero invested capital: spreadsheet engines round the subtraction differently, so treat |IC| < 0.01 as zero
     R("r_roic", "Return on invested capital (NOPAT / (debt + equity - cash))",
-      lambda p: isr("ebit", p) * (1 - a("tax_rate")) / (bsr("total_debt", p) + bsr("total_equity", p) - bsr("cash_sti", p)))
+      lambda p: IF(LT(ABS(invested_capital(p)), 0.01), 0, isr("ebit", p) * (1 - a("tax_rate")) / invested_capital(p)))
     rt.section("Cash flow")
     R("r_fcf_margin", "FCF margin", lambda p: cfr("fcf", p) / isr("revenue", p))
     R("r_fcf_conversion", "FCF conversion (FCF / net income)", lambda p: cfr("fcf", p) / isr("net_income", p))
