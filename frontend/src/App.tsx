@@ -73,7 +73,18 @@ export default function App() {
   const switchBasis = (b: RiskBasis) => { setBasis(b); if (risk) analyse(risk.summary.symbol, b); };
   const submit = (q: string) => (mode === "risk" ? analyse(q) : build(q));
 
-  const saveBlob = (blob: Blob, filename: string) => {
+  const saveBlob = async (blob: Blob, filename: string) => {
+    // Inside a hosting viewer that blocks page-initiated downloads (e.g. a claude.ai artifact) the host's own
+    // save prompt hands the file over; everywhere else a plain download link does it.
+    const host = (window as unknown as { claude?: { use?: (name: string) => Promise<{ save: (r: { filename: string; data: Blob }) => Promise<unknown> } | null> } }).claude;
+    if (host && typeof host.use === "function") {
+      const downloads = await host.use("downloads").catch(() => null);
+      if (downloads) {
+        try { await downloads.save({ filename, data: blob }); }
+        catch (e: unknown) { if ((e as { code?: string })?.code !== "declined") throw new Error(`The viewer could not save the file (${(e as { code?: string })?.code ?? "unknown"}).`); }
+        return;
+      }
+    }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
