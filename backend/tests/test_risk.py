@@ -30,9 +30,12 @@ def test_structure_and_no_errors(risk):
     assert risk.summary["error_cells"] == {}
     s = risk.summary
     assert 0 <= s["composite_score"] <= 100 and s["composite_grade"] in {g for _, g in S.GRADES}
-    for k in ("pd_merton_naive", "pd_merton_rn", "pd_merton_phys", "zmijewski_pd", "pd_rating_1y", "pd_rating_5y"):
+    for k in ("pd_merton_naive", "pd_merton_rn", "pd_merton_phys", "zmijewski_pd"):
         assert 0 <= s[k] <= 1, k
-    assert s["synthetic_rating"] in S.RATING_ORDER
+    if s["financial_sector"]:
+        assert s["pd_rating_1y"] is None and s["synthetic_rating"].startswith("n/a")
+    else:
+        assert 0 <= s["pd_rating_1y"] <= 1 and 0 <= s["pd_rating_5y"] <= 1 and s["synthetic_rating"] in S.RATING_ORDER
     assert s["merton_check"] < 1e-6
     # every model output is a formula, never a pasted number (except the two solver outputs and the price table)
     for sheet in (ALT, PIO, DIST, RTG, DASH):
@@ -109,6 +112,8 @@ def test_single_year_and_financial_cases():
     assert bank.summary["financial_sector"] is True
     assert bank.inputs.values["w_merton"] == 1.0 and bank.inputs.values["w_z2"] == 0.0
     assert abs(bank.summary["composite_score"] - bank.summary["sub_scores"]["sig_merton"]) < 1e-9
+    assert bank.summary["default_spread"] is None and bank.summary["rating_source"].startswith("Not applicable")
+    assert wolf.feedback["distress_votes"] and all(v["model"] != "Ohlson" for v in wolf.feedback["distress_votes"])
     assert any("financial institution" in p.lower() for sec in bank.feedback["qualitative"] for p in sec["points"])
 
 

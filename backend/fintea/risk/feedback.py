@@ -81,9 +81,9 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     mcap = g(INP, "market_cap")
     n_fail, n_flag, dq_status = g(DQ, "n_fail"), g(DQ, "n_flag"), t(DQ, "overall_status")
 
-    distress_votes = [("Altman Z''", zone2 == "Distress"), ("Ohlson", o_flag == "Distress"), ("Zmijewski", x_flag == "Distress"),
-                      ("Springate", s_flag == "Likely failure"), ("Grover", g_flag == "Bankrupt zone"), ("Taffler", t_flag == "At risk"),
-                      ("Merton naive DD", dd_naive is not None and dd_naive < 1.5)]
+    distress_votes = [("Altman Z''", zone2 == "Distress")] + ([("Ohlson", o_flag == "Distress")] if has_prior else []) + [
+                      ("Zmijewski", x_flag == "Distress"), ("Springate", s_flag == "Likely failure"), ("Grover", g_flag == "Bankrupt zone"),
+                      ("Taffler", t_flag == "At risk"), ("Merton naive DD", dd_naive is not None and dd_naive < 1.5)]
     n_votes = sum(1 for _, v in distress_votes if v)
     flagged = [n for n, v in distress_votes if v]
 
@@ -92,8 +92,9 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     pts.append(f"{n_votes} of {len(distress_votes)} distress models classify {ds.profile.name} as distressed" + (f" ({', '.join(flagged)})." if flagged else ".")
                + f" The distress signal index - an uncalibrated weighted average of the model signals, not a probability - is {_n(score, 1)} out of 100 ('{grade}' band).")
     pts.append(f"Market-implied one-year probability of default (Merton naive distance to default) is {_p(pd_naive, 2)} at {_s(dd_naive)} standard deviations from the default point; "
-               f"the accounting-based Ohlson and Zmijewski models put the probability at {_p(o_pd, 1)} and {_p(x_pd, 1)}, and the synthetic rating of {rating} "
-               f"corresponds to a historical one-year default rate of {_p(pd1, 2)} ({_p(pd5, 1)} over five years).")
+               f"the accounting-based Ohlson and Zmijewski models put the probability at {_p(o_pd, 1)} and {_p(x_pd, 1)}"
+               + (f", and the synthetic rating of {rating} corresponds to a historical one-year default rate of {_p(pd1, 2)} ({_p(pd5, 1)} over five years)." if not financial
+                  else "; the coverage-based synthetic rating is not applicable to a financial institution."))
     if financial:
         pts.append("The company is a financial institution: leverage is its business model, so the accounting-ratio models (Altman, Ohlson, Zmijewski, Springate, Grover, Taffler) "
                    "systematically read as 'distressed' and should be disregarded in favour of regulatory capital, asset quality and funding metrics. The market-based Merton signal remains informative.")
@@ -132,7 +133,11 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     else:
         pts.append(f"DuPont: return on equity is undefined because book equity is not positive; net margin is {_p(d_nm)} and asset turnover {_m(d_at, 2)} "
                    f"(return on assets {_p(roa)}), with a tax burden of {_p(d_tb)} and an interest burden of {_p(d_ib)}.")
-    if debt_free:
+    if financial:
+        pts.append("Interest coverage and the synthetic rating are not applicable: for a bank or insurer interest is an operating cost and the balance sheet is "
+                   "deposit- or policy-funded, so Damodaran's coverage tables (which use a separate long-term-interest definition for financial firms) and the "
+                   "EM-score look-alike do not apply. Regulatory capital ratios, asset quality and funding metrics are the relevant measures.")
+    elif debt_free:
         pts.append(f"The company carries no debt and earns a positive EBIT, so the coverage-based synthetic rating is AAA by construction (Damodaran's rule); "
                    f"the default spread of {_p(spread, 2)} implies a pre-tax cost of debt of {_p(kd, 2)} if it borrowed.")
     elif has_int:
@@ -187,7 +192,8 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
 
     pts = []
     if financial:
-        pts.append("Financial institution: accounting-ratio bankruptcy models are not designed for banks, insurers or REITs.")
+        pts.append("Financial institution: accounting-ratio bankruptcy models are not designed for banks, insurers or REITs, and the Merton default point "
+                   "(short-term debt + half of long-term debt) is a poor description of a deposit-funded balance sheet, so even the market-implied probability is indicative only.")
     if ccy != "USD":
         pts.append(f"Statements are in {ccy}; the Ohlson SIZE term converts total assets to USD at the current rate and the Damodaran tables were estimated on US data.")
     if not has_int and debt and debt > 0:

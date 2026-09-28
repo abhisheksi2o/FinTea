@@ -702,8 +702,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rs.title("Synthetic credit rating and rating-implied default rates",
              f"{name} - interest coverage mapped to a rating (Damodaran), cross-checked with the Altman EM score; historical default rates by rating class")
 
-    def rc(key: str, label: str, content: Any, fmt: str = "num", basis: str = "", bold: bool = False) -> None:
-        rs.scalar(key, label, content, fmt, basis=basis, bold=bold)
+    def rc(key: str, label: str, content: Any, fmt: str = "num", basis: str = "", bold: bool = False, style: Optional[str] = None) -> None:
+        rs.scalar(key, label, content, fmt, basis=basis, bold=bold, style=style)
 
     rs.text(f"Interest coverage ({labels[L]})", "section")
     rc("ebit", f"EBIT ({units})", fin("operating_income", L))
@@ -741,15 +741,27 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rc("rating_avg3", "Rating on average EBIT (information only)",
        IF(EQ(rtg("is_large"), 1), lookup_desc(rtg("coverage_avg3"), nl, lambda i: f"rt_l_lb_{i}", lambda i: f"rt_l_r_{i}"),
           lookup_desc(rtg("coverage_avg3"), ns, lambda i: f"rt_s_lb_{i}", lambda i: f"rt_s_r_{i}")), "text")
-    rc("rating", "Synthetic rating used",
-       IF(EQ(rtg("has_interest"), 1), rtg("rating_cov"), IF(EQ(inp("interest_fallback"), 2), rtg("rating_est"), rtg("rating_em"))), "text", bold=True,
-       basis="Coverage-based when interest expense is reported; otherwise the fallback chosen on Inputs")
-    rc("rating_source", "Basis of the rating",
-       IF(EQ(rtg("has_interest"), 1), "Interest coverage (Damodaran table)",
-          IF(EQ(inp("interest_fallback"), 2), "Coverage on estimated interest (debt x (risk-free + BBB spread))", "Altman EM score (interest expense not reported)")), "text")
+    NA_FIN = "n/a (financial institution)"
+    if financial:
+        # Damodaran rates financial-service firms on long-term interest coverage, which the data source cannot separate,
+        # and EBIT / total interest is meaningless for a deposit-funded balance sheet: the rating is not applicable.
+        rc("rating", "Synthetic rating used", NA_FIN, "text", bold=True,
+           basis="Financial institution: interest is an operating cost, so the coverage-based rating and the EM-score look-alike are not meaningful", style="note")
+        rc("rating_source", "Basis of the rating", "Not applicable: financial institution (see the caveat on the Assessment sheet)", "text", style="note")
+    else:
+        rc("rating", "Synthetic rating used",
+           IF(EQ(rtg("has_interest"), 1), rtg("rating_cov"), IF(EQ(inp("interest_fallback"), 2), rtg("rating_est"), rtg("rating_em"))), "text", bold=True,
+           basis="Coverage-based when interest expense is reported; otherwise the fallback chosen on Inputs")
+        rc("rating_source", "Basis of the rating",
+           IF(EQ(rtg("has_interest"), 1), "Interest coverage (Damodaran table)",
+              IF(EQ(inp("interest_fallback"), 2), "Coverage on estimated interest (debt x (risk-free + BBB spread))", "Altman EM score (interest expense not reported)")), "text")
     n_sp = len(S.RATING_ORDER)
-    rc("spread", "Default spread over the risk-free rate", lookup_eq(rtg("rating"), n_sp, lambda i: f"sp_r_{i}", lambda i: f"sp_s_{i}", S.SPREAD_BY_RATING["D"]), "pct2")
-    rc("kd", "Rating-implied pre-tax cost of debt = risk-free + spread", inp("risk_free") + rtg("spread"), "pct2", bold=True)
+    if financial:
+        rc("spread", "Default spread over the risk-free rate", NA_FIN, "text", style="note")
+        rc("kd", "Rating-implied pre-tax cost of debt = risk-free + spread", NA_FIN, "text", style="note")
+    else:
+        rc("spread", "Default spread over the risk-free rate", lookup_eq(rtg("rating"), n_sp, lambda i: f"sp_r_{i}", lambda i: f"sp_s_{i}", S.SPREAD_BY_RATING["D"]), "pct2")
+        rc("kd", "Rating-implied pre-tax cost of debt = risk-free + spread", inp("risk_free") + rtg("spread"), "pct2", bold=True)
     cls_expr: Expr = lift("D")
     for cls, members in reversed(RATING_CLASSES):
         cls_expr = IF(OR(*[EQ(rtg("rating"), m) for m in members]), cls, cls_expr)
@@ -762,12 +774,18 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         return e
 
     rs.text("Rating-implied historical default rates (average cumulative default rates of the rating class)", "section")
-    rc("pd_1y", "1-year default rate of the rating class", dr_lookup("1"), "pct2", bold=True)
-    rc("pd_5y", "5-year cumulative default rate of the rating class", dr_lookup("5"), "pct2", bold=True)
-    notch: Expr = lift(len(S.RATING_ORDER) - 1)
-    for i in reversed(range(len(S.RATING_ORDER))):
-        notch = IF(EQ(rtg("rating"), S.RATING_ORDER[i]), i, notch)
-    rc("rating_notch", f"Rating notch (0 = AAA ... {len(S.RATING_ORDER) - 1} = D)", notch, "int")
+    if financial:
+        rc("pd_1y", "1-year default rate of the rating class", NA_FIN, "text", style="note")
+        rc("pd_5y", "5-year cumulative default rate of the rating class", NA_FIN, "text", style="note")
+        rc("rating_notch", f"Rating notch (0 = AAA ... {len(S.RATING_ORDER) - 1} = D)", 0.0, "int", style="input",
+           basis="Not applicable to a financial institution (carries no weight in the index)")
+    else:
+        rc("pd_1y", "1-year default rate of the rating class", dr_lookup("1"), "pct2", bold=True)
+        rc("pd_5y", "5-year cumulative default rate of the rating class", dr_lookup("5"), "pct2", bold=True)
+        notch: Expr = lift(len(S.RATING_ORDER) - 1)
+        for i in reversed(range(len(S.RATING_ORDER))):
+            notch = IF(EQ(rtg("rating"), S.RATING_ORDER[i]), i, notch)
+        rc("rating_notch", f"Rating notch (0 = AAA ... {len(S.RATING_ORDER) - 1} = D)", notch, "int")
     rs.text("Market-quoted credit (optional inputs)", "section")
     rc("cds_spread", "CDS or bond spread entered on Inputs (0 = none)", inp("cds_spread"), "pct2")
     rc("recovery", "Assumed recovery rate", inp("recovery_rate"), "pct")
