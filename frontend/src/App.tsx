@@ -109,7 +109,7 @@ export default function App() {
       <main>
         {STATIC && (
           <div className="static-banner">
-            <b>Hosted on GitHub Pages.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
+            <b>Pre-built static site.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly on GitHub Pages; this copy was generated ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
         <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onSubmit={submit} staticMode={STATIC} mode={mode} setMode={setMode} basis={basis} setBasis={setBasis} />
