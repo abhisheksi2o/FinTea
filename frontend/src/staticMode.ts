@@ -38,7 +38,7 @@ export async function loadIndex(): Promise<SiteIndex> {
   return indexCache;
 }
 
-export const staticProviders: Provider[] = [{ id: "static", name: "Pre-built models (refreshed nightly from Yahoo Finance)", description: "", available: true, requires: "", reason: "" }];
+export const staticProviders: Provider[] = [{ id: "static", name: "Pre-built from Yahoo Finance data", description: "", available: true, requires: "", reason: "" }];
 
 export async function staticSearch(q: string): Promise<SearchResult[]> {
   const idx = await loadIndex();

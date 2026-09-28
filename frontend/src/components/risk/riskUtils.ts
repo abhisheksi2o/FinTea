@@ -143,7 +143,7 @@ export function tidyChart(c: ChartSpec, s: RiskSummary): ChartSpec {
     return c.id === "pd_models" ? `${k} (5-year)` : `${k} (${n})`;
   });
   if (c.id === "pd_models") {
-    const i1 = categories.findIndex((cat) => String(cat).startsWith("Synthetic rating") && !String(cat).endsWith("(5-year)"));
+    const i1 = categories.findIndex((cat) => String(cat).startsWith("Synthetic rating") && !String(cat).endsWith("(5-year)") && !String(cat).endsWith("(1-year)"));
     if (i1 >= 0 && categories.some((cat) => String(cat).endsWith("(5-year)"))) categories[i1] = `${categories[i1]} (1-year)`;
   }
   void s;

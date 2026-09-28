@@ -17,6 +17,9 @@ const loadMode = (): AppMode => { try { return localStorage.getItem(MODE_KEY) ==
 const BASIS_KEY = "fintea.risk.basis";
 const loadBasis = (): RiskBasis => { try { return localStorage.getItem(BASIS_KEY) === "annual" ? "annual" : "ltm"; } catch { return "ltm"; } };
 const GRADE_ORDER: Record<string, number> = { Severe: 0, High: 1, Moderate: 2, Low: 3, Minimal: 4 };
+/** GitHub Pages rebuilds the site nightly; any other host serves a frozen copy. */
+const NIGHTLY_HOST = typeof location !== "undefined" && /\.github\.io$/.test(location.hostname);
+const fmtPd = (pd: number | null) => pd == null ? "n/a" : pd > 0 && pd < 0.00005 ? "<0.01%" : `${(pd * 100).toFixed(pd < 0.01 ? 2 : 1)}%`;
 
 export default function App() {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -94,14 +97,14 @@ export default function App() {
   const downloadEdited = async () => {
     if (!model) return;
     setExporting(true);
-    try { saveBlob(await exportWorkbook(model), `FinTea_${model.summary.symbol}_model_${model.summary.base_year}${model.parent_id ? "_edited" : ""}.xlsx`); }
+    try { await saveBlob(await exportWorkbook(model), `FinTea_${model.summary.symbol}_model_${model.summary.base_year}${model.parent_id ? "_edited" : ""}.xlsx`); }
     catch (e: any) { setError(e.message ?? String(e)); }
     finally { setExporting(false); }
   };
   const downloadRisk = async () => {
     if (!risk) return;
     setExporting(true);
-    try { saveBlob(await exportWorkbook(risk), `FinTea_${risk.summary.symbol}_default_risk_${(risk.summary.base_label ?? String(risk.summary.base_year)).replace(/\s+/g, "_")}.xlsx`); }
+    try { await saveBlob(await exportWorkbook(risk), `FinTea_${risk.summary.symbol}_default_risk_${(risk.summary.base_label ?? String(risk.summary.base_year)).replace(/\s+/g, "_")}.xlsx`); }
     catch (e: any) { setError(e.message ?? String(e)); }
     finally { setExporting(false); }
   };
@@ -120,7 +123,7 @@ export default function App() {
       <main>
         {STATIC && (
           <div className="static-banner">
-            <b>Pre-built static site.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly on GitHub Pages; this copy was generated ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
+            <b>Pre-built static site.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built from Yahoo Finance data on ${index.generated}${NIGHTLY_HOST ? " (refreshed nightly)" : ""}.` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
         <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onSubmit={submit} staticMode={STATIC} mode={mode} setMode={setMode} basis={basis} setBasis={setBasis} />
@@ -229,7 +232,11 @@ export default function App() {
                   <button key={m.symbol} className="company" onClick={() => build(m.symbol)} title={m.sector}>
                     <div className="company-sym">{m.symbol} <span className="company-tag">{m.country}</span>{m.financial && <span className="company-tag fin">financial</span>}</div>
                     <div className="company-name">{m.name}</div>
-                    <div className={`company-up ${m.implied_price > 0 && m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} → {m.implied_price.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({(m.upside * 100).toFixed(0)}%)</div>
+                    {m.implied_price > 0 && Math.abs(m.upside) <= 5 ? (
+                      <div className={`company-up ${m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} → {m.implied_price.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({(m.upside * 100).toFixed(0)}%)</div>
+                    ) : (
+                      <div className="company-up muted" title="The mechanical DCF does not give a usable value here (negative or extreme implied price); open the model to see which assumption checks are flagged">{m.currency} {m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} · DCF flagged, open to review</div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -265,7 +272,7 @@ export default function App() {
                     {m.risk ? (
                       <div className="company-risk">
                         <span className={`grade grade-${m.risk.grade.toLowerCase()}`}>{m.risk.grade}</span>
-                        <span className="muted">{Math.round(m.risk.score)}/100 · PD {m.risk.pd != null ? `${(m.risk.pd * 100).toFixed(m.risk.pd < 0.01 ? 2 : 1)}%` : "n/a"}{m.risk.ltm ? " · LTM" : ""}</span>
+                        <span className="muted">{Math.round(m.risk.score)}/100 · PD {fmtPd(m.risk.pd)} · {m.risk.ltm ? "LTM" : m.risk.basis}</span>
                       </div>
                     ) : <div className="company-risk muted">no report</div>}
                   </button>

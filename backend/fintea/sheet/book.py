@@ -230,7 +230,8 @@ class Book:
             "id": ch.id, "type": ch.type, "title": ch.title, "fmt": ch.fmt, "y_title": ch.y_title, "x_title": ch.x_title,
             "stacked": ch.stacked, "y_min": ch.y_min, "y_max": ch.y_max, "note": ch.note, "anchor": ch.anchor,
             "categories": [self._json_value(v) for v in ch.categories.eval(self)] if ch.categories is not None else None,
-            "series": [{"name": s.name, "color": s.color, "values": [self._json_value(v) for v in s.ref.eval(self)]} for s in ch.series],
+            # a text cell in a numeric series (e.g. "n/a (financial institution)") is a gap, not a value
+            "series": [{"name": s.name, "color": s.color, "values": [None if isinstance(v, str) else self._json_value(v) for v in s.ref.eval(self)]} for s in ch.series],
         }
 
     def to_json(self) -> Dict[str, Any]:

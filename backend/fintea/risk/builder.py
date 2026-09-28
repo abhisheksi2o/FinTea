@@ -881,8 +881,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         ("pdt_phys", "Merton iterated, physical", mer("pd_phys"), "1 year", "Market-implied with the expected asset return"),
         ("pdt_ohlson", "Ohlson O-score", prior(DIST, "o_pd", L), "1 year", "Accounting logit calibrated on 1970-76 US bankruptcies"),
         ("pdt_zmij", "Zmijewski X-score", dis("x_pd", L), "1 year", "Accounting probit calibrated on 1972-78 US data"),
-        ("pdt_r1", "Synthetic rating - historical default rate", rtg("pd_1y"), "1 year", "Long-run average default rate of the rating class"),
-        ("pdt_r5", "Synthetic rating - historical default rate", rtg("pd_5y"), "5 years", "Cumulative average default rate of the rating class"),
+        ("pdt_r1", "Synthetic rating - historical default rate (1-year)", rtg("pd_1y"), "1 year", "Long-run average default rate of the rating class"),
+        ("pdt_r5", "Synthetic rating - historical default rate (5-year)", rtg("pd_5y"), "5 years", "Cumulative average default rate of the rating class"),
     ]
     pd_rows.insert(1, ("pdt_naive_rf", "Merton naive DD, risk-free drift", mer("pd_naive_rf"), "1 year", "Market-implied without the trailing-return momentum term"))
     if float(R.values.get("cds_spread", 0) or 0) > 0:
