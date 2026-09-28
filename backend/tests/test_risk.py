@@ -276,3 +276,16 @@ def test_api_accepts_the_basis_option():
     d = client.get(f"/api/risk/{r2.json()['id']}/download")
     assert d.status_code == 200 and "LTM_" in d.headers["content-disposition"]
     assert client.post("/api/risk", json={"query": "BYND", "provider": "sample", "basis": "quarterly"}).status_code == 422
+
+
+def test_debt_free_company_has_no_error_cells_and_rates_aaa():
+    """A company with no debt and no interest expense (e.g. Arista, Monster) must not divide by zero anywhere."""
+    ds = load_dataset("MSFT", "sample")
+    for per in list(ds.periods) + ([ds.ltm] if ds.ltm else []):
+        per.fields.update({"short_term_debt": 0.0, "long_term_debt": 0.0, "total_debt": 0.0, "interest_expense": 0.0})
+    r = build_risk_model(ds)
+    s = r.summary
+    assert s["error_cells"] == {}
+    assert r.book.num(RTG, "debt_free") == 1 and r.book.num(RTG, "coverage") == 100000 and r.book.num(RTG, "coverage_avg3") == 100000
+    assert s["synthetic_rating"] == "AAA" and s["pd_rating_1y"] == 0.0 and s["default_point"] == 0.0
+    assert r.book.val(RTG, "rating_avg3") == "AAA"

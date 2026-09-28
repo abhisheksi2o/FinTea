@@ -747,8 +747,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     for q in range(1, n_avg):
         ebit_avg = ebit_avg + fin("operating_income", L - q)
     ebit_avg = ebit_avg / n_avg
-    rc("coverage_avg3", f"Interest coverage on average EBIT of the last {n_avg} fiscal year(s) (Damodaran's advice for atypical years)",
-       IF(EQ(rtg("has_interest"), 1), ebit_avg / rtg("interest"), 0), "mult")
+    rc("coverage_avg3", f"Interest coverage on average EBIT of the last {n_avg} fiscal year(s) (Damodaran's advice for atypical years; 100,000 when debt-free)",
+       IF(GT(rtg("interest"), 0), ebit_avg / rtg("interest"), IF(EQ(rtg("debt_free"), 1), 100000, 0)), "mult")
     rc("rating_avg3", "Rating on average EBIT (information only)",
        IF(EQ(rtg("is_large"), 1), lookup_desc(rtg("coverage_avg3"), nl, lambda i: f"rt_l_lb_{i}", lambda i: f"rt_l_r_{i}"),
           lookup_desc(rtg("coverage_avg3"), ns, lambda i: f"rt_s_lb_{i}", lambda i: f"rt_s_r_{i}")), "text")
