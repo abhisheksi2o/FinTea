@@ -77,7 +77,7 @@ class FMPProvider(DataProvider):
         months = [m for m in months if m != today][-61:]
         return PriceSeries(symbol, name, [by_month[m][0] for m in months], [by_month[m][1] for m in months])
 
-    def fetch(self, symbol: str) -> FinancialDataset:
+    def fetch(self, symbol: str, **options) -> FinancialDataset:
         prof = self._get("profile", symbol=symbol)
         if not prof:
             raise ProviderError(f"FMP has no profile for {symbol}")

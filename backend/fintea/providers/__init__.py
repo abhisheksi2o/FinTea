@@ -35,8 +35,8 @@ def list_providers() -> List[dict]:
     return [p.info() for p in registry().values()]
 
 
-def load_dataset(query: str, provider_id: str = "yahoo") -> FinancialDataset:
-    """Resolve a company name or ticker and return a normalised dataset."""
+def load_dataset(query: str, provider_id: str = "yahoo", **options) -> FinancialDataset:
+    """Resolve a company name or ticker and return a normalised dataset (``options`` are passed to the provider)."""
     p = get_provider(provider_id)
     symbol = query.strip()
     if hasattr(p, "resolve"):
@@ -46,7 +46,7 @@ def load_dataset(query: str, provider_id: str = "yahoo") -> FinancialDataset:
         if hits:
             exact = [h for h in hits if h.symbol.upper() == query.strip().upper()]
             symbol = (exact or hits)[0].symbol
-    ds = p.fetch(symbol)
+    ds = p.fetch(symbol, **options)
     return normalize(ds)
 
 

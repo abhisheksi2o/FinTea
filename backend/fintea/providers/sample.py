@@ -42,5 +42,5 @@ class SampleProvider(DataProvider):
         ds.source = f"Offline snapshot of Yahoo Finance data retrieved {ds.retrieved_at[:10]}"
         return ds
 
-    def fetch(self, symbol: str) -> FinancialDataset:
+    def fetch(self, symbol: str, **options) -> FinancialDataset:
         return self._load(symbol)

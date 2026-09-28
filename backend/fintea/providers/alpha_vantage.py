@@ -78,7 +78,7 @@ class AlphaVantageProvider(DataProvider):
         dates = sorted(d for d in ts if d[:7] != today)[-61:]
         return PriceSeries(symbol, name, dates, [float(ts[d]["5. adjusted close"]) for d in dates])
 
-    def fetch(self, symbol: str) -> FinancialDataset:
+    def fetch(self, symbol: str, **options) -> FinancialDataset:
         ov = self._get(function="OVERVIEW", symbol=symbol)
         if not ov.get("Symbol"):
             raise ProviderError(f"Alpha Vantage has no overview for {symbol}")

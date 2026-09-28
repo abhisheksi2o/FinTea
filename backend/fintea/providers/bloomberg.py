@@ -127,7 +127,7 @@ class BloombergProvider(DataProvider):
                 closes.append(row.getElementAsFloat("PX_LAST"))
         return PriceSeries(sec, name, dates[-61:], closes[-61:])
 
-    def fetch(self, symbol: str) -> FinancialDataset:  # pragma: no cover - requires terminal
+    def fetch(self, symbol: str, **options) -> FinancialDataset:  # pragma: no cover - requires terminal
         _, svc = self._svc()
         sec = self._bbg_symbol(symbol)
         # reference data: profile + latest market data
