@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from .. import config
 from ..excel import verify_workbook, write_workbook
+from ..excel.verify import recalculate
 from ..providers import FinancialDataset, load_dataset
 from .builder import RiskResult, build_risk_model, stamp_verification
 from .inputs import derive_inputs
@@ -81,6 +82,11 @@ class RiskService:
             recalculated = verification.pop("recalculated", None)
         stamp_verification(result, verification)     # text only; formulas unchanged, so the verification still holds
         xlsx = write_workbook(result.book)
+        if recalculated is not None:                 # cached-values copy: re-save the stamped workbook so it carries the statement too
+            try:
+                recalculated = recalculate(xlsx)
+            except Exception:
+                pass
         stored = StoredRisk(id=uuid.uuid4().hex[:12], result=result, xlsx=xlsx, verification=verification,
                             recalculated=recalculated, provider=provider)
         with self._lock:

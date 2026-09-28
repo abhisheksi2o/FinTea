@@ -15,7 +15,37 @@ $ ./run.sh            # full app with live data for any listed company; open htt
 
 ![FinTea overview](docs/screenshot-overview.png)
 
-## What you get
+## Default risk analyzer
+
+The second product in the same app: type a company and get a **default-risk report** as a formula-driven,
+independently verified Excel workbook plus an interactive dashboard. Switch the mode selector next to the
+search bar to *Default risk analysis*.
+
+| Sheet | Content |
+|---|---|
+| Cover / Assessment | Key outputs, sheet index, and a written assessment generated from the model outputs (solvency, liquidity, coverage, market-implied risk, earnings quality, model agreement, caveats, data quality) |
+| Dashboard | Distress signal index with editable weights, probability of default by model with horizon and measure, model verdicts, key credit ratios and ten native Excel charts |
+| Inputs | Market inputs, model choices, every published coefficient and threshold with its source, Damodaran rating tables, S&P default-rate table - all blue cells the formulas reference |
+| Financials / Ratios | Reported statements with the Yahoo field per line; liquidity, leverage, coverage, profitability, cash-flow and market-based ratios by year |
+| Altman Z | Z (1968), Z' (1983), Z'' (1995) with zones, the EM score and its bond-rating equivalent, an EBIT stress case |
+| Piotroski F, Beneish M | Nine fundamental-strength signals and eight earnings-manipulation indices, year by year |
+| Distress Models | Ohlson O (logit, Ohlson's 3.8% cut-off), Zmijewski X (probit), Springate, Grover, Taffler |
+| Merton PD | Equity volatility from the daily price table, naive distance to default (Bharath & Shumway 2008), the iterated two-equation Merton solve with formula residual checks, stress tests, expected loss |
+| Synthetic Rating | Interest coverage -> rating -> default spread (Damodaran), Altman EM-score rating, historical default rates by rating class, optional CDS-implied PD |
+| Data Quality | 25 live integrity and applicability checks (PASS / FLAG / FAIL), model applicability matrix, source traceability, and the LibreOffice verification statement |
+
+The only Python-computed numbers in the workbook are the two Merton solver outputs (asset value and
+volatility), and the workbook re-derives the market inputs from them as a check. Everything else is a
+formula, so the report recalculates when an input is edited; every formula cell is recalculated by
+LibreOffice and compared with the engine before the file is served. Companies with a single fiscal
+year (fresh-start accounting) and financial institutions are handled explicitly: year-over-year models
+are marked unavailable and accounting-ratio models carry no weight for banks and insurers.
+
+API: `POST /api/risk {query, provider, overrides}`, `POST /api/risk/{id}/rebuild`, `GET /api/risk/{id}/download`.
+Offline snapshots for a distressed company (Beyond Meat), a post-restructuring single-year company
+(Wolfspeed) and a bank (HDFC Bank) are bundled for tests and demos.
+
+## What you get (financial model)
 
 Every workbook contains twelve sheets. **Every projected number is a live Excel formula** that
 traces back to the blue input cells on the Assumptions sheet; nothing is pasted as a value.
@@ -34,6 +64,8 @@ traces back to the blue input cells on the Assumptions sheet; nothing is pasted 
 | Sensitivity | Two 5x5 grids of implied share price (WACC x terminal growth, WACC x exit multiple) - each cell recomputes the DCF |
 | Ratios | Growth, margins, ROE / ROA / ROIC, cash conversion, liquidity, leverage, working-capital days, per-share data |
 | Feedback | 19 formula-driven integrity and reasonableness checks (PASS / FLAG / FAIL), Altman Z-score, Piotroski F-score, and a written qualitative assessment |
+
+For the full credit picture (Altman family, Piotroski, Beneish, Ohlson, Zmijewski, Springate, Grover, Taffler, Merton, synthetic rating) use the default risk analyzer above.
 
 Formatting follows banking convention: blue inputs on a pale-yellow fill, black formulas,
 green cross-sheet links, bold totals, negatives in parentheses, zeros as dashes, frozen headers,
@@ -118,6 +150,8 @@ backend/
   fintea/sheet/       expression AST + in-memory workbook (evaluate in Python, render to Excel)
   fintea/providers/   Yahoo, Bloomberg, FMP, Alpha Vantage, sample; normalisation
   fintea/model/       assumptions derivation, model builder (all sheets), feedback, optional LLM
+  fintea/risk/        default-risk analyzer: model specs (coefficients, tables, sources), inputs, Merton solver,
+                      workbook builder (13 sheets + charts), written assessment, service
   fintea/excel/       openpyxl writer (formatting) and LibreOffice verifier
   fintea/api/         FastAPI routes; fintea/service.py orchestrates and caches models
   tests/              expression engine, model integrity, LibreOffice recalculation, API
@@ -132,6 +166,9 @@ backend/
 | POST | `/api/models` | `{query, provider, years, overrides}` -> full model JSON (summary, assumptions, feedback, verification, sheets) |
 | POST | `/api/models/{id}/rebuild` | rebuild with assumption overrides, no re-fetch |
 | GET | `/api/models/{id}/download` | the .xlsx (`?recalculated=1` for a copy with cached values) |
+| POST | `/api/risk` | `{query, provider, overrides}` -> default-risk analysis JSON (summary, inputs, feedback, verification, charts, sheets) |
+| POST | `/api/risk/{id}/rebuild` | re-run with input overrides (volatility, default point, weights, stress shocks, CDS spread ...) |
+| GET | `/api/risk/{id}/download` | the default-risk .xlsx (`?recalculated=1` for cached values) |
 
 Interactive docs at `/docs`.
 
@@ -158,5 +195,12 @@ gives a complete environment.
   the current market D/E and relevered at the target structure. Risk-free = US 10-year yield.
 * FCFF = NOPAT + D&A - capex - increase in working capital (+ SBC only if elected); terminal value by
   Gordon growth (primary) with the exit multiple as cross-check; mid-year convention.
+* Default risk: published coefficients are used as-is (Altman 1968/1983/1995, Piotroski 2000, Beneish 1999,
+  Ohlson 1980, Zmijewski 1984, Springate 1978, Grover 2001, Taffler 1983, Bharath & Shumway 2008, Damodaran's
+  coverage tables, S&P average cumulative default rates); every coefficient and threshold is a blue cell on the
+  Inputs sheet with its source. Ohlson's SIZE term uses total assets in US dollars deflated by the lagged GNP
+  price index (1968 = 100). The distress signal index is an uncalibrated weighted average of model signals, not a
+  probability of default; the headline probabilities are the Merton and rating-implied ones, each tagged with
+  its horizon and measure.
 * Models are generated from public data and mechanical assumptions. They are a starting point for
   analysis, not investment advice.
