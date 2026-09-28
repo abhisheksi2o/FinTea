@@ -1,9 +1,12 @@
 """Fill gaps in provider data using accounting identities, recording every fix."""
 from __future__ import annotations
 
+import statistics
 from typing import List
 
 from .base import ALL_FIELDS, FinancialDataset, FiscalPeriod
+
+SHARE_RATIO_LIMIT = 3.0   # share counts more than 3x apart cannot be the same share class or unit
 
 
 def _g(p: FiscalPeriod, k: str):
@@ -16,9 +19,50 @@ def _set(p: FiscalPeriod, k: str, v: float, how: str, log: List[str]):
     log.append(f"{p.period_end[:4]}: {k} derived as {how}")
 
 
+def _reconcile_share_counts(ds: FinancialDataset, log: List[str]) -> None:
+    """Yahoo's shares-outstanding field is sometimes a different share class from the quoted price (Berkshire Class A
+    count with the Class B quote, ASX CDIs at 10 per share) or off by a factor of 1,000 (CME, Emerald Resources), and
+    single years of the diluted weighted-average series can be mis-scaled. The diluted count is reported in the same
+    class as EPS and the quote, so the median of its fiscal-year series is the reference: any count more than
+    SHARE_RATIO_LIMIT away from it is replaced by the nearest consistent count and the replacement is logged."""
+    periods = list(ds.periods) + ([ds.ltm] if ds.ltm is not None else [])
+    dil = [p.fields.get("diluted_shares") for p in ds.periods if (p.fields.get("diluted_shares") or 0) > 0]
+    if not dil:
+        return
+    ref = float(statistics.median(dil))
+
+    def off(v) -> bool:
+        return v is None or v <= 0 or v / ref > SHARE_RATIO_LIMIT or ref / v > SHARE_RATIO_LIMIT
+
+    for p in periods:
+        f = p.fields
+        d = f.get("diluted_shares")
+        if d is not None and d > 0 and off(d):                      # a mis-scaled year of the diluted series
+            so = f.get("shares_outstanding")
+            new = so if (so and not off(so)) else ref
+            _set(p, "diluted_shares", float(new), f"reported diluted shares ({d / 1e6:,.1f}m) are more than {SHARE_RATIO_LIMIT:.0f}x "
+                 f"away from the {ref / 1e6:,.1f}m median of the series; replaced", log)
+        so = f.get("shares_outstanding")
+        if so is not None and so > 0 and off(so):                   # a different share class or unit than the diluted count
+            d2 = f.get("diluted_shares")
+            new = d2 if (d2 and not off(d2)) else ref
+            _set(p, "shares_outstanding", float(new), f"reported shares outstanding ({so / 1e6:,.1f}m) are in a different share class "
+                 f"or unit than the diluted count; replaced by {new / 1e6:,.1f}m", log)
+    m = ds.market
+    if m.shares_outstanding and off(m.shares_outstanding):
+        last = periods[-1].fields
+        new = float(last.get("shares_outstanding") or last.get("diluted_shares") or ref)
+        old = m.shares_outstanding
+        m.shares_outstanding = new
+        ds.notes.append(f"Share count reconciled: the source's shares outstanding ({old / 1e6:,.1f}m) differ from the diluted weighted-average "
+                        f"count ({ref / 1e6:,.1f}m median across the fiscal years) by more than {SHARE_RATIO_LIMIT:.0f}x, which means a different "
+                        f"share class or unit; {new / 1e6:,.1f}m shares (the class of the quoted price) are used for the market capitalisation.")
+
+
 def normalize(ds: FinancialDataset) -> FinancialDataset:
     log: List[str] = []
     prev: FiscalPeriod | None = None
+    _reconcile_share_counts(ds, log)
     todo = list(ds.periods) + ([ds.ltm] if ds.ltm is not None else [])
     for p in todo:
         if p is ds.ltm:

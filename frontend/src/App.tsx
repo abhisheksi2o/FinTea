@@ -118,7 +118,7 @@ export default function App() {
     <div className={`app mode-${mode}`}>
       <header>
         <div className="brand"><span className="logo">Fin</span>Tea <span className="tag">financial models &amp; default risk analytics</span></div>
-        <div className="brand-sub">Type a company. Get a fully linked three-statement DCF model or a multi-model default risk report in Excel - every number a formula, every assumption explained, every formula verified.</div>
+        <div className="brand-sub">Type a company. Get a fully linked three-statement DCF model or a multi-model default risk report in Excel - every number a formula, every assumption explained, {STATIC ? "formulas verified on a nightly sample" : "every formula verified"}.</div>
       </header>
       <main>
         {STATIC && (
@@ -143,12 +143,14 @@ export default function App() {
         )}
         {error && <div className="error" role="alert">{error}</div>}
 
+        {showRisk && risk && STATIC && <div className="back-row"><button className="linkish small" onClick={() => setRisk(null)}>Back to all companies</button></div>}
         {showRisk && risk && <RiskView r={risk} busy={busy} staticMode={STATIC} staticNotice={STATIC_RISK_NOTICE} onRebuild={rebuildRisk} onBasis={STATIC ? undefined : switchBasis} onExport={risk.download_url ? undefined : downloadRisk} exporting={exporting} />}
 
         {showDcf && model && (
           <>
             <div className="model-head">
               <div>
+                {STATIC && <button className="linkish small" onClick={() => setModel(null)}>Back to all companies</button>}
                 <h2>{model.summary.company} <span className="sym">{model.summary.symbol}</span></h2>
                 <div className="muted">{model.summary.source} · {model.summary.units} · historical {model.summary.labels[0]}–{model.summary.labels[model.meta.nh - 1]} · projections to {model.summary.labels[model.summary.labels.length - 1]}</div>
               </div>
@@ -176,7 +178,7 @@ export default function App() {
             {tab === "Overview" && (
               <div className="overview">
                 <div className={`status-line ${model.feedback.n_fail > 0 ? "fail" : model.feedback.n_flag > 0 ? "flag" : "pass"}`}>
-                  {model.feedback.status} · {model.verification.status === "verified" ? `${model.verification.cells_checked.toLocaleString()} formulas independently verified by LibreOffice` : model.verification.status === "browser" ? "recalculated in your browser from the verified base model" : `formula verification ${model.verification.status}`}
+                  {model.feedback.status} · {model.verification.status === "verified" ? `${model.verification.cells_checked.toLocaleString()} formulas independently verified by LibreOffice` : model.verification.status === "browser" ? "recalculated in your browser from the pre-built base model" : STATIC && model.verification.status === "skipped" ? "formulas verified on the nightly sample; this model not individually re-checked" : `formula verification ${model.verification.status}`}
                 </div>
                 <div className="overview-cols">
                   <div>
@@ -195,6 +197,7 @@ export default function App() {
                   </div>
                   <div>
                     <h3>Qualitative summary</h3>
+                    {model.parent_id && <p className="muted small"><i>The narrative describes the base case; the cards and sheets reflect your edited assumptions.</i></p>}
                     {model.feedback.qualitative.slice(0, 4).map((s) => (
                       <p key={s.title}><b>{s.title}.</b> {s.points.join(" ")}</p>
                     ))}
@@ -272,7 +275,7 @@ export default function App() {
                     {m.risk ? (
                       <div className="company-risk">
                         <span className={`grade grade-${m.risk.grade.toLowerCase()}`}>{m.risk.grade}</span>
-                        <span className="muted">{Math.round(m.risk.score)}/100 · PD {fmtPd(m.risk.pd)} · {m.risk.ltm ? "LTM" : m.risk.basis}</span>
+                        <span className="muted">{Math.round(m.risk.score)}/100 · PD {fmtPd(m.risk.pd)} · {m.risk.ltm ? "LTM" : m.risk.basis}{m.financial ? " · Merton only" : ""}</span>
                       </div>
                     ) : <div className="company-risk muted">no report</div>}
                   </button>

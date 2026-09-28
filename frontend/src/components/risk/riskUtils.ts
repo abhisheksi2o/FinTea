@@ -24,6 +24,7 @@ export function fmtRisk(v: unknown, fmt: string, fallback = "n/a"): string {
   if (!isNum(v)) return fallback;
   if (Math.abs(v) < 1e-12) return ZERO[fmt] ?? "0";
   const s = fmtValue(Math.abs(v), fmt);
+  if (s === "-") return ZERO[fmt] ?? "0";          // a value that rounds to zero at this precision reads as 0, not as a dash
   return v < 0 ? `-${s}` : s;
 }
 

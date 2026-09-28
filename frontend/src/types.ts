@@ -65,6 +65,7 @@ export interface RiskSummary {
   financial_sector: boolean; price: number | null; price_date: string; market_cap: number | null; market_cap_usd_bn: number | null;
   base_year: number; labels: string[]; nh: number; has_prior_year: boolean;
   basis?: RiskBasis; ltm?: boolean; base_label?: string; balance_date?: string; n_annual?: number; periods_note?: string; basis_note?: string;
+  debt_free?: boolean;
   composite_score: number | null; composite_grade: RiskGrade | string; composite_equal: number | null;
   agreement: number | null; agreement_n: number | null;
   pd_merton_naive: number | null; dd_naive: number | null; pd_naive_rf: number | null; dd_naive_rf: number | null;
