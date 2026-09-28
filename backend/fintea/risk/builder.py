@@ -864,10 +864,10 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         ("cd_tl_ta", "Total liabilities / total assets", lambda p: rat("r_tl_ta", p), "pct"),
         ("cd_eq_ta", "Book equity / total assets", lambda p: rat("r_equity_ta", p), "pct"),
         ("cd_current", "Current ratio", lambda p: rat("r_current", p), "mult"), ("cd_quick", "Quick ratio", lambda p: rat("r_quick", p), "mult"),
-        ("cd_f", "Piotroski F-score", lambda p: pio("f_score", p) if p >= 1 else 0.0, "int"),
-        ("cd_m", "Beneish M-score", lambda p: ben("m8", p) if p >= 1 else (ben("m8", 1) if has_prior else 0.0), "score"),
+        ("cd_f", "Piotroski F-score", lambda p: pio("f_score", p) if p >= 1 else None, "int"),
+        ("cd_m", "Beneish M-score", lambda p: ben("m8", p) if p >= 1 else None, "score"),
         ("cd_m_thr", "Beneish threshold", lambda p: inp("t_m_flag"), "score"),
-        ("cd_o_pd", "Ohlson probability", lambda p: dis("o_pd", p) if p >= 1 else (dis("o_pd", 1) if has_prior else 0.0), "pct"),
+        ("cd_o_pd", "Ohlson probability", lambda p: dis("o_pd", p) if p >= 1 else None, "pct"),
         ("cd_x_pd", "Zmijewski probability", lambda p: dis("x_pd", p), "pct"),
         ("cd_roa", "Return on assets", lambda p: rat("r_roa", p), "pct"), ("cd_cfo_debt", "CFO / total debt", lambda p: rat("r_cfo_debt", p), "pct"),
     ]
@@ -878,6 +878,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         book.set(DASH, r, cd_c0, label, "text", "label")
         for p in H:
             content = fn(p)
+            if content is None:      # no value for this year: the cell stays empty and charts show a gap
+                continue
             book.set(DASH, r, cd_c0 + 1 + p, content, fmt, "link" if isinstance(content, K) else ("input" if not isinstance(content, Expr) else "formula"), key=f"{key}_{p}")
     ms_r = cd_r0 + len(cd_rows) + 3
     book.set(DASH, ms_r - 1, cd_c0, "Merton capital structure", "text", "header")
