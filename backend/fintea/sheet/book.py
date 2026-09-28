@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl.utils import get_column_letter
 
-from .expr import Err, Expr, CellRef
+from .expr import Err, Expr, CellRef, RangeRef
 
 FIRST_PERIOD_COL = 3  # column C holds the first period on statement sheets
 
@@ -31,6 +31,9 @@ FORMATS = {
     "general": 'General',
     "factor": '0.0000',
     "beta": '0.000',
+    "pct4": '0.0000%;(0.0000%);"-"',
+    "score": '0.00;-0.00;0.00',
+    "score3": '0.000;-0.000;0.000',
 }
 
 # style codes: input (blue, hardcoded), formula (black), link (green, cross-sheet),
@@ -66,6 +69,33 @@ class Cell:
 
 
 @dataclass
+class ChartSeries:
+    name: str
+    ref: RangeRef                 # the values (one row or one column)
+    color: Optional[str] = None   # hex RRGGBB
+
+
+@dataclass
+class Chart:
+    """A native chart: rendered by openpyxl in the workbook and resolved to values for the web preview."""
+    id: str
+    type: str                     # line | bar | radar | area
+    title: str
+    anchor: str                   # top-left cell of the chart frame
+    series: List[ChartSeries]
+    categories: Optional[RangeRef] = None
+    fmt: str = "num2"             # number format of the value axis
+    y_title: str = ""
+    x_title: str = ""
+    width: float = 16.0           # cm
+    height: float = 8.0
+    stacked: bool = False
+    y_min: Optional[float] = None
+    y_max: Optional[float] = None
+    note: str = ""
+
+
+@dataclass
 class Sheet:
     name: str
     cells: Dict[Tuple[int, int], Cell] = field(default_factory=dict)
@@ -78,6 +108,7 @@ class Sheet:
     merges: List[str] = field(default_factory=list)
     period_cols: Dict[int, int] = field(default_factory=dict)  # period -> col
     group_rows: List[Tuple[int, int]] = field(default_factory=list)
+    charts: List[Chart] = field(default_factory=list)
 
     def rows(self):
         return range(1, self.max_row + 1)
@@ -187,6 +218,22 @@ class Book:
         self._vals.clear()
 
     # -- serialisation -----------------------------------------------------
+    def _json_value(self, v: Any) -> Any:
+        if isinstance(v, Err):
+            return None
+        if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+            return None
+        return v
+
+    def chart_json(self, ch: Chart) -> Dict[str, Any]:
+        return {
+            "id": ch.id, "type": ch.type, "title": ch.title, "fmt": ch.fmt, "y_title": ch.y_title, "x_title": ch.x_title,
+            "stacked": ch.stacked, "y_min": ch.y_min, "y_max": ch.y_max, "note": ch.note, "anchor": ch.anchor,
+            "categories": [self._json_value(v) for v in ch.categories.eval(self)] if ch.categories is not None else None,
+            # a text cell in a numeric series (e.g. "n/a (financial institution)") is a gap, not a value
+            "series": [{"name": s.name, "color": s.color, "values": [None if isinstance(v, str) else self._json_value(v) for v in s.ref.eval(self)]} for s in ch.series],
+        }
+
     def to_json(self) -> Dict[str, Any]:
         out = {"sheets": [], "meta": self.meta}
         for name in self.order:
@@ -231,5 +278,6 @@ class Book:
                 "tab_color": sh.tab_color,
                 "row_heights": {str(k): v for k, v in sh.row_heights.items()},
                 "rows": [{"r": r, "cells": cells} for r, cells in sorted(rows.items())],
+                "charts": [self.chart_json(ch) for ch in sh.charts],
             })
         return out

@@ -13,6 +13,9 @@ export function fmtValue(v: unknown, fmt: string): string {
     case "num2": return isZero ? "-" : wrap(Math.abs(x).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
     case "pct": return isZero ? "-" : wrap((Math.abs(x) * 100).toFixed(1) + "%");
     case "pct2": return isZero ? "-" : wrap((Math.abs(x) * 100).toFixed(2) + "%");
+    case "pct4": return isZero ? "-" : wrap((Math.abs(x) * 100).toFixed(4) + "%");
+    case "score": return x.toFixed(2);
+    case "score3": return x.toFixed(3);
     case "mult": return isZero ? "-" : wrap(Math.abs(x).toFixed(1) + "x");
     case "price": return x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case "int": return x.toLocaleString("en-US", { maximumFractionDigits: 0 });

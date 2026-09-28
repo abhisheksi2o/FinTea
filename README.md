@@ -15,7 +15,52 @@ $ ./run.sh            # full app with live data for any listed company; open htt
 
 ![FinTea overview](docs/screenshot-overview.png)
 
-## What you get
+## Default risk analyzer
+
+The second product in the same app: type a company and get a **default-risk report** as a formula-driven,
+independently verified Excel workbook plus an interactive dashboard. Switch the mode selector next to the
+search bar to *Default risk analysis*. The web view leads with the market-implied and rating-implied
+probabilities of default, the Altman Z'' zone, model agreement and the leverage / coverage / liquidity trends,
+then the distress signal index, stress tests, per-model tables, DuPont analysis, editable inputs (rebuild in
+one click), a data-quality audit and every sheet of the workbook with its formulas. The search bar offers
+keyboard-navigable suggestions with exchange and sector, recent searches and example chips.
+
+**Statement basis.** By default the latest column of every sheet is the **latest twelve months (LTM)**:
+income and cash-flow items are the sum of the four most recent consecutive quarters from Yahoo's quarterly
+statements and the balance sheet is the latest quarter end, so the scores reflect the most recent filings
+rather than a fiscal year that may be nine months old. The reported fiscal years stay as the trend columns,
+and the year-over-year models (Piotroski, Beneish, the Ohlson change terms) compare the LTM column with the
+last fiscal year, which the report says explicitly. When the quarterly data cannot support an LTM period
+(semi-annual reporters, a missing quarter, no quarter-end balance sheet, or a fiscal year that is already the
+latest period) the analysis falls back to the fiscal year and says why. The *Latest fiscal year* option in the
+search bar (`basis: "annual"` in the API) runs the fiscal-year basis instead.
+
+| Sheet | Content |
+|---|---|
+| Cover / Assessment | Key outputs, sheet index, and a written assessment generated from the model outputs (solvency, liquidity, coverage, market-implied risk, earnings quality, model agreement, caveats, data quality) |
+| Dashboard | Distress signal index with editable weights, probability of default by model with horizon and measure, model verdicts, key credit ratios and ten native Excel charts |
+| Inputs | Market inputs, model choices, every published coefficient and threshold with its source, Damodaran rating tables, S&P default-rate table - all blue cells the formulas reference |
+| Financials / Ratios | Reported statements with the Yahoo field per line; liquidity, leverage, coverage, profitability, cash-flow and market-based ratios by year |
+| DuPont | Three-step (net margin x asset turnover x equity multiplier) and five-step (tax burden x interest burden x EBIT margin x asset turnover x equity multiplier) ROE decomposition by year, with charts |
+| Altman Z | Z (1968), Z' (1983), Z'' (1995) with zones, the EM score and its bond-rating equivalent, an EBIT stress case |
+| Piotroski F, Beneish M | Nine fundamental-strength signals and eight earnings-manipulation indices, year by year |
+| Distress Models | Ohlson O (logit, Ohlson's 3.8% cut-off), Zmijewski X (probit), Springate, Grover, Taffler |
+| Merton PD | Equity volatility from the daily price table, naive distance to default (Bharath & Shumway 2008), the iterated two-equation Merton solve with formula residual checks, stress tests, expected loss |
+| Synthetic Rating | Interest coverage -> rating -> default spread (Damodaran), Altman EM-score rating, historical default rates by rating class, optional CDS-implied PD |
+| Data Quality | 25 live integrity and applicability checks (PASS / FLAG / FAIL), model applicability matrix, source traceability, and the LibreOffice verification statement |
+
+The only Python-computed numbers in the workbook are the two Merton solver outputs (asset value and
+volatility), and the workbook re-derives the market inputs from them as a check. Everything else is a
+formula, so the report recalculates when an input is edited; every formula cell is recalculated by
+LibreOffice and compared with the engine before the file is served. Companies with a single fiscal
+year (fresh-start accounting) and financial institutions are handled explicitly: year-over-year models
+are marked unavailable and accounting-ratio models carry no weight for banks and insurers.
+
+API: `POST /api/risk {query, provider, overrides, basis}`, `POST /api/risk/{id}/rebuild`, `GET /api/risk/{id}/download`.
+Offline snapshots for a distressed company (Beyond Meat), a post-restructuring single-year company
+(Wolfspeed) and a bank (HDFC Bank) are bundled for tests and demos.
+
+## What you get (financial model)
 
 Every workbook contains twelve sheets. **Every projected number is a live Excel formula** that
 traces back to the blue input cells on the Assumptions sheet; nothing is pasted as a value.
@@ -34,6 +79,8 @@ traces back to the blue input cells on the Assumptions sheet; nothing is pasted 
 | Sensitivity | Two 5x5 grids of implied share price (WACC x terminal growth, WACC x exit multiple) - each cell recomputes the DCF |
 | Ratios | Growth, margins, ROE / ROA / ROIC, cash conversion, liquidity, leverage, working-capital days, per-share data |
 | Feedback | 19 formula-driven integrity and reasonableness checks (PASS / FLAG / FAIL), Altman Z-score, Piotroski F-score, and a written qualitative assessment |
+
+For the full credit picture (Altman family, Piotroski, Beneish, Ohlson, Zmijewski, Springate, Grover, Taffler, Merton, synthetic rating) use the default risk analyzer above.
 
 Formatting follows banking convention: blue inputs on a pale-yellow fill, black formulas,
 green cross-sheet links, bold totals, negatives in parentheses, zeros as dashes, frozen headers,
@@ -91,11 +138,12 @@ GitHub Pages cannot run the Python backend, so the workflow in `.github/workflow
 builds the site on every push and nightly. The company universe lives in `data/universe.csv`
 (generated by `scripts/universe.py` from the NSE constituent file and the index articles on
 Wikipedia, every symbol validated against Yahoo Finance). The build is sharded across 12 parallel
-runners: each shard fetches live data, builds the model for its companies, verifies a 10% sample
-with LibreOffice, and stores each model as compressed JSON (`models/{SYMBOL}.json.gz`, about
-40 KB); a final job merges the shard indexes, adds the frontend built with `VITE_STATIC=1`, and
-pushes everything to the `gh-pages` branch, which GitHub Pages serves. Excel files are written
-in the browser on download, so no workbooks need to be stored.
+runners: each shard fetches live data, builds the DCF model **and the default-risk report** for its
+companies, verifies a 10% sample of both workbooks with LibreOffice, and stores each as compressed
+JSON (`models/{SYMBOL}.json.gz`, about 40 KB, and `risk/{SYMBOL}.json.gz`, about 60 KB); a final
+job merges the shard indexes, adds the frontend built with `VITE_STATIC=1`, and pushes everything
+to the `gh-pages` branch, which GitHub Pages serves. Excel files are written in the browser on
+download, so no workbooks need to be stored.
 
 "All listed companies" is not feasible for a static, nightly-refreshed site (roughly 50,000
 listings worldwide, tens of thousands of data requests a night), so the universe is the set of
@@ -104,10 +152,16 @@ index constituents above; any other listed company can be built with the full ap
 * lists the pre-built companies with market and index filters and loads their compressed model JSON;
 * recalculates every formula in the browser when you edit assumptions (`frontend/src/engine.ts`
   implements the same Excel semantics as the Python engine);
-* writes the edited model to Excel client-side with ExcelJS, including formulas and formatting.
+* writes the edited model to Excel client-side with ExcelJS, including formulas and formatting;
+* in *Default risk analysis* mode, lists the same companies with their distress grade, score and
+  market-implied PD (highest signal first), opens the pre-built report with every tab and chart, and
+  exports its workbook in the browser (all formulas and data; the native chart objects are only in
+  the server-written file). The pre-built reports use the LTM basis wherever the quarterly data
+  allows it; input edits and rebuilds need the full app because the Merton solve and the LibreOffice
+  verification run on the server.
 
-Live builds of arbitrary tickers, a different projection horizon and the AI commentary need the
-full app (`./run.sh` or Docker).
+Live builds of arbitrary tickers, a different projection horizon, input edits to the risk reports and
+the AI commentary need the full app (`./run.sh` or Docker).
 
 ## Architecture
 
@@ -118,6 +172,8 @@ backend/
   fintea/sheet/       expression AST + in-memory workbook (evaluate in Python, render to Excel)
   fintea/providers/   Yahoo, Bloomberg, FMP, Alpha Vantage, sample; normalisation
   fintea/model/       assumptions derivation, model builder (all sheets), feedback, optional LLM
+  fintea/risk/        default-risk analyzer: model specs (coefficients, tables, sources), inputs, Merton solver,
+                      workbook builder (13 sheets + charts), written assessment, service
   fintea/excel/       openpyxl writer (formatting) and LibreOffice verifier
   fintea/api/         FastAPI routes; fintea/service.py orchestrates and caches models
   tests/              expression engine, model integrity, LibreOffice recalculation, API
@@ -132,6 +188,9 @@ backend/
 | POST | `/api/models` | `{query, provider, years, overrides}` -> full model JSON (summary, assumptions, feedback, verification, sheets) |
 | POST | `/api/models/{id}/rebuild` | rebuild with assumption overrides, no re-fetch |
 | GET | `/api/models/{id}/download` | the .xlsx (`?recalculated=1` for a copy with cached values) |
+| POST | `/api/risk` | `{query, provider, overrides, basis}` -> default-risk analysis JSON (summary, inputs, feedback, verification, charts, sheets); `basis` is `ltm` (default) or `annual` |
+| POST | `/api/risk/{id}/rebuild` | re-run with input overrides (volatility, default point, weights, stress shocks, CDS spread ...) |
+| GET | `/api/risk/{id}/download` | the default-risk .xlsx (`?recalculated=1` for cached values) |
 
 Interactive docs at `/docs`.
 
@@ -158,5 +217,12 @@ gives a complete environment.
   the current market D/E and relevered at the target structure. Risk-free = US 10-year yield.
 * FCFF = NOPAT + D&A - capex - increase in working capital (+ SBC only if elected); terminal value by
   Gordon growth (primary) with the exit multiple as cross-check; mid-year convention.
+* Default risk: published coefficients are used as-is (Altman 1968/1983/1995, Piotroski 2000, Beneish 1999,
+  Ohlson 1980, Zmijewski 1984, Springate 1978, Grover 2001, Taffler 1983, Bharath & Shumway 2008, Damodaran's
+  coverage tables, S&P average cumulative default rates); every coefficient and threshold is a blue cell on the
+  Inputs sheet with its source. Ohlson's SIZE term uses total assets in US dollars deflated by the lagged GNP
+  price index (1968 = 100). The distress signal index is an uncalibrated weighted average of model signals, not a
+  probability of default; the headline probabilities are the Merton and rating-implied ones, each tagged with
+  its horizon and measure.
 * Models are generated from public data and mechanical assumptions. They are a starting point for
   analysis, not investment advice.

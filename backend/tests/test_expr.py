@@ -54,3 +54,19 @@ def test_cycle_detection():
     b.set("S", 2, 1, K("S", "a"), key="b")
     with pytest.raises(CycleError):
         b.val("S", "a")
+
+
+def test_log_exp_normal_functions():
+    import math
+    from fintea.sheet import LN, LOG10, EXP, NORMSDIST, IFERROR
+    from fintea.sheet.expr import NUM
+    b = Book()
+    b.set("S", 1, 1, 2.5, key="a"); b.set("S", 2, 1, -0.7, key="n"); b.set("S", 3, 1, 0.0, key="z")
+    b.set("S", 4, 1, LN(K("S", "a")), key="ln"); b.set("S", 5, 1, EXP(K("S", "n")), key="exp")
+    b.set("S", 6, 1, NORMSDIST(K("S", "n")), key="nd"); b.set("S", 7, 1, LOG10(K("S", "a")), key="l10")
+    b.set("S", 8, 1, LN(K("S", "z")), key="lnz"); b.set("S", 9, 1, IFERROR(LN(K("S", "n")), -1), key="lnn")
+    b.set("S", 10, 1, EXP(1000), key="big"); b.set("S", 11, 1, NORMSDIST(-40), key="tail")
+    assert abs(b.val("S", "ln") - math.log(2.5)) < 1e-15 and abs(b.val("S", "exp") - math.exp(-0.7)) < 1e-15
+    assert abs(b.val("S", "nd") - 0.24196365222307303) < 1e-15 and abs(b.val("S", "l10") - math.log10(2.5)) < 1e-15
+    assert b.val("S", "lnz") == NUM and b.val("S", "lnn") == -1 and b.val("S", "big") == NUM and b.val("S", "tail") == 0.0
+    assert b.formula(b.get("S", 6, 1)) == "=NORMSDIST(A2)" and b.formula(b.get("S", 9, 1)) == '=IFERROR(LN(A2),-1)'

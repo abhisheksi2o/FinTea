@@ -11,6 +11,7 @@ from .. import config
 from ..excel import soffice_available
 from ..providers import get_provider, list_providers
 from ..providers.base import ProviderError
+from ..risk.service import risk_service
 from ..service import service
 
 router = APIRouter(prefix="/api")
@@ -30,6 +31,23 @@ class RebuildRequest(BaseModel):
     overrides: Dict[str, Any] = Field(default_factory=dict)
     verify: bool = True
     include_sheets: bool = True
+
+
+class RiskRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=80, description="Company name or ticker")
+    provider: str = Field(config.DEFAULT_PROVIDER)
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    verify: bool = True
+    include_sheets: bool = True
+    basis: str = Field("ltm", pattern="^(ltm|annual)$",
+                       description="'ltm': latest twelve months from quarterly statements when available (default); 'annual': last fiscal year")
+
+
+class RiskRebuildRequest(BaseModel):
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    verify: bool = True
+    include_sheets: bool = True
+    basis: Optional[str] = Field(None, pattern="^(ltm|annual)$")
 
 
 @router.get("/health")
@@ -91,5 +109,51 @@ def download(model_id: str, recalculated: bool = False):
     data = m.recalculated if (recalculated and m.recalculated) else m.xlsx
     sym = re.sub(r"[^A-Za-z0-9._-]", "_", m.result.dataset.profile.symbol)
     fname = f"FinTea_{sym}_model_{m.result.summary['base_year']}.xlsx"
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# ---------------------------------------------------------------------------
+# Default risk analysis
+# ---------------------------------------------------------------------------
+@router.post("/risk")
+def build_risk(req: RiskRequest):
+    try:
+        m = risk_service.build(req.query, req.provider, req.overrides, req.verify, req.basis)
+    except ProviderError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return m.payload(req.include_sheets)
+
+
+@router.post("/risk/{risk_id}/rebuild")
+def rebuild_risk(risk_id: str, req: RiskRebuildRequest):
+    try:
+        m = risk_service.rebuild(risk_id, req.overrides, req.verify, req.basis)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Analysis not found (it may have expired); run it again")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return m.payload(req.include_sheets)
+
+
+@router.get("/risk/{risk_id}")
+def get_risk(risk_id: str, include_sheets: bool = True):
+    try:
+        return risk_service.get(risk_id).payload(include_sheets)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+
+@router.get("/risk/{risk_id}/download")
+def download_risk(risk_id: str, recalculated: bool = False):
+    try:
+        m = risk_service.get(risk_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    data = m.recalculated if (recalculated and m.recalculated) else m.xlsx
+    sym = re.sub(r"[^A-Za-z0-9._-]", "_", m.result.dataset.profile.symbol)
+    fname = f"FinTea_{sym}_default_risk_{str(m.result.summary.get('base_label') or m.result.summary['base_year']).replace(' ', '_')}.xlsx"
     return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})

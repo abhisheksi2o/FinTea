@@ -6,7 +6,7 @@
  * supports exactly the grammar FinTea's Python renderer emits: cell and range
  * references (optionally sheet-qualified), + - * / ^, comparisons, unary minus,
  * numbers, strings, TRUE/FALSE and the functions SUM AVERAGE MIN MAX COUNT ABS
- * SQRT ROUND IF AND OR NOT IFERROR SLOPE INTERCEPT RSQ CORREL STDEV VARP COVAR.
+ * SQRT ROUND IF AND OR NOT IFERROR SLOPE INTERCEPT RSQ CORREL STDEV VARP COVAR LN LOG10 EXP NORMSDIST.
  */
 import type { Cell, Sheet } from "./types";
 
@@ -121,6 +121,24 @@ function stats(ys: Val[], xs: Val[]) {
   return { n, my, mx, sxx, syy, sxy };
 }
 function roundHalfAway(x: number, n: number) { const m = 10 ** n; return (Math.floor(Math.abs(x) * m + 0.5) / m) * (x >= 0 ? 1 : -1); }
+/** Standard normal CDF - Hart (1968) rational approximation as published by West (2005), accurate to ~1e-14. */
+export function normSDist(x: number): number {
+  const a = Math.abs(x);
+  let r: number;
+  if (a > 37) r = 0;
+  else {
+    const e = Math.exp(-a * a / 2);
+    if (a < 7.07106781186547) {
+      let b = 3.52624965998911e-2 * a + 0.700383064443688; b = b * a + 6.37396220353165; b = b * a + 33.912866078383; b = b * a + 112.079291497871; b = b * a + 221.213596169931; b = b * a + 220.206867912376;
+      let c = 8.83883476483184e-2 * a + 1.75566716318264; c = c * a + 16.064177579207; c = c * a + 86.7807322029461; c = c * a + 296.564248779674; c = c * a + 637.333633378831; c = c * a + 793.826512519948; c = c * a + 440.413735824752;
+      r = e * b / c;
+    } else {
+      let b = a + 0.65; b = a + 4 / b; b = a + 3 / b; b = a + 2 / b; b = a + 1 / b;
+      r = e / (b * 2.506628274631);
+    }
+  }
+  return x > 0 ? 1 - r : r;
+}
 
 export class Engine {
   private cells = new Map<string, Map<string, Cell>>();
@@ -200,6 +218,10 @@ export class Engine {
       case "AND": { for (const v of flat) { const x = num(v); if (x instanceof XErr) return x; if (!x) return false; } return true; }
       case "OR": { for (const v of flat) { const x = num(v); if (x instanceof XErr) return x; if (x) return true; } return false; }
       case "NOT": { const v = num(scalar(0)); return v instanceof XErr ? v : !v; }
+      case "LN": { const v = num(scalar(0)); return v instanceof XErr ? v : v <= 0 ? NUM : Math.log(v); }
+      case "LOG10": { const v = num(scalar(0)); return v instanceof XErr ? v : v <= 0 ? NUM : Math.log10(v); }
+      case "EXP": { const v = num(scalar(0)); if (v instanceof XErr) return v; const r = Math.exp(v); return Number.isFinite(r) ? r : NUM; }
+      case "NORMSDIST": { const v = num(scalar(0)); return v instanceof XErr ? v : normSDist(v); }
       case "STDEV": { const v = numbers(flat); if (v instanceof XErr) return v; if (v.length < 2) return DIV0; const m = v.reduce((s, x) => s + x, 0) / v.length; return Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / (v.length - 1)); }
       case "VARP": { const v = numbers(flat); if (v instanceof XErr) return v; if (!v.length) return DIV0; const m = v.reduce((s, x) => s + x, 0) / v.length; return v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length; }
       case "SLOPE": case "INTERCEPT": case "RSQ": case "CORREL": case "COVAR": {

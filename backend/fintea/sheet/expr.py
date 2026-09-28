@@ -394,11 +394,41 @@ def _f_covar(ys, xs):
     return sum((x - mx) * (y - my) for y, x in pts) / n
 
 
+def _f_ln(x):
+    x = _num(x)
+    if isinstance(x, Err):
+        return x
+    if x <= 0:
+        return NUM
+    return math.log(x)
+def _f_log10(x):
+    x = _num(x)
+    if isinstance(x, Err):
+        return x
+    if x <= 0:
+        return NUM
+    return math.log10(x)
+def _f_exp(x):
+    x = _num(x)
+    if isinstance(x, Err):
+        return x
+    try:
+        return math.exp(x)
+    except OverflowError:
+        return NUM
+def _f_normsdist(x):
+    """Standard normal CDF (legacy Excel name NORMSDIST, accepted by Excel, LibreOffice and Google Sheets)."""
+    x = _num(x)
+    if isinstance(x, Err):
+        return x
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
 _EAGER = {
     "SUM": _f_sum, "AVERAGE": _f_average, "MIN": _f_min, "MAX": _f_max, "COUNT": _f_count,
     "ABS": _f_abs, "SQRT": _f_sqrt, "ROUND": _f_round, "AND": _f_and, "OR": _f_or, "NOT": _f_not,
     "SLOPE": _f_slope, "INTERCEPT": _f_intercept, "RSQ": _f_rsq, "CORREL": _f_correl,
     "STDEV": _f_stdev, "VARP": _f_varp, "COVAR": _f_covar,
+    "LN": _f_ln, "LOG10": _f_log10, "EXP": _f_exp, "NORMSDIST": _f_normsdist,
 }
 
 
@@ -425,7 +455,7 @@ class Fn(Expr):
         vals = [a.eval(book) for a in self.args]
         # scalar error args propagate for scalar functions
         for v in vals:
-            if isinstance(v, Err) and name in ("ABS", "SQRT", "ROUND", "AND", "OR", "NOT"):
+            if isinstance(v, Err) and name in ("ABS", "SQRT", "ROUND", "AND", "OR", "NOT", "LN", "LOG10", "EXP", "NORMSDIST"):
                 return v
         try:
             return fn(*vals)
@@ -456,3 +486,7 @@ def CORREL(y, x): return Fn("CORREL", y, x)
 def STDEV(*a): return Fn("STDEV", *a)
 def VARP(*a): return Fn("VARP", *a)
 def COVAR(y, x): return Fn("COVAR", y, x)
+def LN(a): return Fn("LN", a)
+def LOG10(a): return Fn("LOG10", a)
+def EXP(a): return Fn("EXP", a)
+def NORMSDIST(a): return Fn("NORMSDIST", a)
