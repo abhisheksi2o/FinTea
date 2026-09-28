@@ -7,8 +7,8 @@ from ..providers.base import FinancialDataset
 from ..sheet import Book
 from .inputs import RiskInputs
 
-DASH, INP, FIN, RAT, ALT, PIO, BEN, DIST, MER, RTG, DQ = ("Dashboard", "Inputs", "Financials", "Ratios", "Altman Z", "Piotroski F",
-                                                         "Beneish M", "Distress Models", "Merton PD", "Synthetic Rating", "Data Quality")
+DASH, INP, FIN, RAT, DUP, ALT, PIO, BEN, DIST, MER, RTG, DQ = ("Dashboard", "Inputs", "Financials", "Ratios", "DuPont", "Altman Z", "Piotroski F",
+                                                              "Beneish M", "Distress Models", "Merton PD", "Synthetic Rating", "Data Quality")
 
 
 def _p(x: Any, d: int = 1) -> str:
@@ -72,7 +72,8 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     s_flag, g_flag, t_flag = t(DIST, "s_flag", L), t(DIST, "g_flag", L), t(DIST, "t_flag", L)
     rating, rating_src, spread, kd = t(RTG, "rating"), t(RTG, "rating_source"), g(RTG, "spread"), g(RTG, "kd")
     has_int = g(RTG, "has_interest") == 1
-    cov = g(RTG, "coverage") if has_int else None
+    debt_free = g(RTG, "debt_free") == 1
+    cov = g(RTG, "coverage") if (has_int and not debt_free) else None
     pd1, pd5 = g(RTG, "pd_1y"), g(RTG, "pd_5y")
     tl_ta, de, nd_ebitda, cur, quick = g(RAT, "r_tl_ta", L), g(RAT, "r_de", L), g(RAT, "r_nd_ebitda", L), g(RAT, "r_current", L), g(RAT, "r_quick", L)
     roa, cfo_debt, runway, fcf = g(RAT, "r_roa", L), g(RAT, "r_cfo_debt", L), g(RAT, "r_runway", L), g(RAT, "fcf", L)
@@ -122,7 +123,19 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     sections.append({"title": "Liquidity", "points": pts})
 
     pts = [f"Return on assets of {_p(roa)} with a net margin of {_p(g(RAT, 'r_net_margin', L))} on revenue of {ccy} {_n(rev)}m."]
-    if has_int:
+    d_roe, d_nm, d_at, d_em = g(DUP, "d_roe", L), g(DUP, "d_net_margin", L), g(DUP, "d_asset_turn", L), g(DUP, "d_equity_mult", L)
+    d_tb, d_ib, d_ebm, d_lev = g(DUP, "d_tax_burden", L), g(DUP, "d_int_burden", L), g(DUP, "d_ebit_margin", L), g(DUP, "d_leverage_effect", L)
+    if d_roe is not None:
+        pts.append(f"DuPont: return on equity of {_p(d_roe)} = net margin {_p(d_nm)} x asset turnover {_m(d_at, 2)} x equity multiplier {_m(d_em, 2)}; "
+                   f"leverage adds {_p(d_lev)} on top of the {_p(roa)} return on assets. Five-step view: tax burden {_p(d_tb)}, interest burden {_p(d_ib)}, "
+                   f"EBIT margin {_p(d_ebm)}." + (" An equity multiplier above 5x means most of the ROE comes from leverage rather than operations." if d_em is not None and d_em > 5 else ""))
+    else:
+        pts.append(f"DuPont: return on equity is undefined because book equity is not positive; net margin is {_p(d_nm)} and asset turnover {_m(d_at, 2)} "
+                   f"(return on assets {_p(roa)}), with a tax burden of {_p(d_tb)} and an interest burden of {_p(d_ib)}.")
+    if debt_free:
+        pts.append(f"The company carries no debt and earns a positive EBIT, so the coverage-based synthetic rating is AAA by construction (Damodaran's rule); "
+                   f"the default spread of {_p(spread, 2)} implies a pre-tax cost of debt of {_p(kd, 2)} if it borrowed.")
+    elif has_int:
         pts.append(f"EBIT covers interest expense {_m(cov)} times, which maps to a synthetic rating of {rating} ({rating_src}), a default spread of {_p(spread, 2)} "
                    f"and a rating-implied pre-tax cost of debt of {_p(kd, 2)}.")
     else:
@@ -202,6 +215,7 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
 
     methodology = [
         "Altman Z (1968), Z' (1983) and Z'' (1995) discriminant scores with the published coefficients and zones; X4 uses market equity for Z and book equity for Z' and Z''. The EM score (Z'' + 3.25) is mapped to a bond-rating equivalent.",
+        "DuPont analysis: ROE = net margin x asset turnover x equity multiplier (three-step) and tax burden x interest burden x EBIT margin x asset turnover x equity multiplier (five-step), on ending balances; ROE is left undefined when book equity is not positive.",
         "Piotroski F-score: nine binary signals on profitability, leverage/liquidity/dilution and operating efficiency, year over year.",
         "Beneish M-score: eight indices comparing the year with the prior year in a probit model; the flag threshold is -1.78.",
         "Ohlson O-score (logit), Zmijewski X-score (probit), Springate, Grover and Taffler scores with published coefficients; probabilities via the logistic and standard normal functions.",

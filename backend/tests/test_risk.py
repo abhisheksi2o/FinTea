@@ -10,7 +10,7 @@ from fintea.excel import soffice_available, verify_workbook, write_workbook
 from fintea.main import app
 from fintea.providers import load_dataset
 from fintea.risk import RISK_SHEET_ORDER, build_risk_model, derive_inputs, naive_distance_to_default, solve_merton
-from fintea.risk.builder import ALT, DASH, DIST, DQ, MER, PIO, RTG, stamp_verification
+from fintea.risk.builder import ALT, DASH, DIST, DQ, DUP, MER, PIO, RTG, stamp_verification
 from fintea.risk.merton import norm_cdf
 from fintea.risk import spec as S
 
@@ -80,6 +80,23 @@ def test_scores_match_independent_recomputation(risk):
     ws = {k: b.num(DASH, f"{k}_w") for k in subs}
     total_w = sum(ws.values())
     assert abs(b.num(DASH, "composite_score") - sum(subs[k] * ws[k] for k in subs) / total_w) < 1e-9
+
+
+def test_dupont_identities(risk):
+    ds, b = risk.dataset, risk.book
+    for p, per in enumerate(ds.periods):
+        f = {k: (v or 0.0) / M for k, v in per.fields.items()}
+        assert abs(b.num(DUP, "d_roa", p) - f["net_income"] / f["total_assets"]) < 1e-12
+        if f["total_equity"] > 0:
+            roe = f["net_income"] / f["total_equity"]
+            assert abs(b.num(DUP, "d_roe", p) - roe) < 1e-9 and abs(b.num(DUP, "d_roe_check", p) - roe) < 1e-12
+            if f["pretax_income"] != 0 and f["operating_income"] != 0:
+                assert abs(b.num(DUP, "d_roe5", p) - roe) < 1e-9
+        else:
+            assert not b.has(DUP, "d_roe", p) and not b.has(DUP, "d_equity_mult", p)
+    d = risk.summary["dupont"]
+    assert set(d) >= {"roe", "net_margin", "asset_turnover", "equity_multiplier", "tax_burden", "interest_burden", "ebit_margin", "roa"}
+    assert any(c["id"] == "dupont_roe" for c in risk.book.to_json()["sheets"][risk.book.order.index(DUP)]["charts"])
 
 
 def test_single_year_and_financial_cases():

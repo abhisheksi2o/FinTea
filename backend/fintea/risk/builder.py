@@ -24,12 +24,12 @@ from . import spec as S
 from .inputs import RISK_INPUT_SPECS, RiskInputs, derive_inputs
 from .merton import solve_merton
 
-COVER, ASSESS, DASH, INP, FIN, RAT, ALT, PIO, BEN, DIST, MER, RTG, DQ = (
-    "Cover", "Assessment", "Dashboard", "Inputs", "Financials", "Ratios", "Altman Z", "Piotroski F", "Beneish M",
+COVER, ASSESS, DASH, INP, FIN, RAT, DUP, ALT, PIO, BEN, DIST, MER, RTG, DQ = (
+    "Cover", "Assessment", "Dashboard", "Inputs", "Financials", "Ratios", "DuPont", "Altman Z", "Piotroski F", "Beneish M",
     "Distress Models", "Merton PD", "Synthetic Rating", "Data Quality")
-SHEET_ORDER = [COVER, ASSESS, DASH, INP, FIN, RAT, ALT, PIO, BEN, DIST, MER, RTG, DQ]
+SHEET_ORDER = [COVER, ASSESS, DASH, INP, FIN, RAT, DUP, ALT, PIO, BEN, DIST, MER, RTG, DQ]
 NAVY, BLUE, ORANGE, PURPLE, GREEN, GOLD, RED, GREY = "1F3864", "2E75B6", "C55A11", "7030A0", "548235", "BF8F00", "C00000", "7F7F7F"
-TAB_COLORS = {COVER: NAVY, ASSESS: NAVY, DASH: RED, INP: BLUE, FIN: GREY, RAT: PURPLE, ALT: GREEN, PIO: GREEN, BEN: GOLD,
+TAB_COLORS = {COVER: NAVY, ASSESS: NAVY, DASH: RED, INP: BLUE, FIN: GREY, RAT: PURPLE, DUP: PURPLE, ALT: GREEN, PIO: GREEN, BEN: GOLD,
               DIST: GREEN, MER: ORANGE, RTG: ORANGE, DQ: GREY}
 
 FIN_GROUPS = [
@@ -132,6 +132,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     def inp(k: str) -> K: return K(INP, k)
     def fin(k: str, p: int) -> K: return K(FIN, k, p)
     def rat(k: str, p: int) -> K: return K(RAT, k, p)
+    def dup(k: str, p: int) -> K: return K(DUP, k, p)
     def alt(k: str, p: int) -> K: return K(ALT, k, p)
     def pio(k: str, p: int) -> K: return K(PIO, k, p)
     def ben(k: str, p: int) -> K: return K(BEN, k, p)
@@ -239,10 +240,10 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     table("Default spread by rating notch (Damodaran; notches without a published spread are interpolated)", ["Rating", "Default spread"],
           sp_rows, lambda i, c: {1: f"sp_r_{i}", 2: f"sp_s_{i}"}[c], ["text", "pct2"], S.DAMODARAN_SOURCE)
     dr_classes = list(S.SP_DEFAULT_RATES)
-    dr_rows = [[cls] + [S.SP_DEFAULT_RATES[cls][h] for h in ("1", "3", "5", "10")] for cls in dr_classes]
-    table(f"Average cumulative default rates by rating class ({S.SP_AS_OF})", ["Rating class", "1 year", "3 years", "5 years", "10 years"],
-          dr_rows, lambda i, c: {1: f"dr_cls_{i}", 2: f"dr_{dr_classes[i]}_1", 3: f"dr_{dr_classes[i]}_3", 4: f"dr_{dr_classes[i]}_5", 5: f"dr_{dr_classes[i]}_10"}[c],
-          ["text", "pct2", "pct2", "pct2", "pct2"], S.SP_SOURCE)
+    dr_rows = [[cls] + [S.SP_DEFAULT_RATES[cls][h] for h in S.SP_HORIZONS] for cls in dr_classes]
+    table(f"Average cumulative default rates by rating class ({S.SP_AS_OF})", ["Rating class", "1 year", "5 years"],
+          dr_rows, lambda i, c: {1: f"dr_cls_{i}", 2: f"dr_{dr_classes[i]}_1", 3: f"dr_{dr_classes[i]}_5"}[c],
+          ["text", "pct2", "pct2"], S.SP_SOURCE)
     ib.sh.col_widths = {1: 62, 2: 14, 3: 60, 4: 90, 5: 12}
 
     # =====================================================================
@@ -340,6 +341,65 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     Rw("r_ev_ebitda", "EV / EBITDA (x)", lambda p: rat("r_ev", p) / rat("ebitda_calc", p), "mult")
     Rw("r_debt_mve", "Total debt / market value of equity (x)", lambda p: fin("total_debt", p) / fin("mve", p), "mult")
     rt.sh.col_widths = {1: 60, 2: 12}
+
+    # =====================================================================
+    # DuPont analysis
+    # =====================================================================
+    du = SB(book, DUP, H, labels, dates, nh)
+    du.title("DuPont analysis", f"{name} - return on equity decomposed into margin, asset efficiency and leverage (ending balances)")
+    du_hdr = du.r
+    du.header("", "")
+    te_pos = [((ds.periods[p].fields.get("total_equity") or 0.0) > 0) for p in H]   # ROE is undefined with non-positive book equity
+
+    def if_eq(p: int, expr: Expr):
+        return expr if te_pos[p] else None
+
+    du_rows: Dict[str, int] = {}
+
+    def DR(key: str, label: str, fn, fmt: str, **kw) -> int:
+        du_rows[key] = du.row(key, label, fn, fmt, **kw)
+        return du_rows[key]
+
+    du.section("Three-step DuPont: ROE = net margin x asset turnover x equity multiplier")
+    DR("d_net_margin", "Net margin (net income / revenue)", lambda p: safe(fin("net_income", p) / fin("revenue", p)), "pct")
+    DR("d_asset_turn", "Asset turnover (revenue / total assets, x)", lambda p: safe(fin("revenue", p) / fin("total_assets", p)), "mult")
+    DR("d_equity_mult", "Equity multiplier (total assets / book equity, x)", lambda p: if_eq(p, fin("total_assets", p) / fin("total_equity", p)), "mult")
+    DR("d_roe", "Return on equity = net margin x asset turnover x equity multiplier",
+                   lambda p: if_eq(p, dup("d_net_margin", p) * dup("d_asset_turn", p) * dup("d_equity_mult", p)), "pct", bold=True)
+    DR("d_roe_check", "Check: net income / book equity", lambda p: if_eq(p, fin("net_income", p) / fin("total_equity", p)), "pct")
+    DR("d_roe_change", "Change in ROE versus the prior year (percentage points)",
+           lambda p: (dup("d_roe", p) - dup("d_roe", p - 1)) if (p >= 1 and te_pos[p] and te_pos[p - 1]) else None, "pct")
+    du.section("Five-step DuPont: ROE = tax burden x interest burden x EBIT margin x asset turnover x equity multiplier")
+    DR("d_tax_burden", "Tax burden (net income / pre-tax income)", lambda p: safe(fin("net_income", p) / fin("pretax_income", p)), "pct")
+    DR("d_int_burden", "Interest burden (pre-tax income / EBIT)", lambda p: safe(fin("pretax_income", p) / fin("operating_income", p)), "pct")
+    DR("d_ebit_margin", "EBIT margin (EBIT / revenue)", lambda p: safe(fin("operating_income", p) / fin("revenue", p)), "pct")
+    DR("d_roe5", "Return on equity (five-step product)",
+           lambda p: if_eq(p, dup("d_tax_burden", p) * dup("d_int_burden", p) * dup("d_ebit_margin", p) * dup("d_asset_turn", p) * dup("d_equity_mult", p)), "pct", bold=True)
+    du.section("Return on assets and leverage contribution")
+    DR("d_roa", "Return on assets = net margin x asset turnover", lambda p: dup("d_net_margin", p) * dup("d_asset_turn", p), "pct", bold=True)
+    DR("d_leverage_effect", "Leverage contribution to ROE (ROE - ROA, percentage points)", lambda p: if_eq(p, dup("d_roe", p) - dup("d_roa", p)), "pct")
+    DR("d_debt_ta", "Total debt / total assets (memo)", lambda p: safe(fin("total_debt", p) / fin("total_assets", p)), "pct", memo=True)
+    du.blank()
+    du.text("Ending balances are used so the figures tie to the Ratios sheet. Years with non-positive book equity are left blank: ROE and the equity multiplier "
+            "are undefined and a high ROE from a thin equity base is a leverage warning rather than a strength. "
+            "The five-step product equals the three-step product whenever pre-tax income and EBIT are non-zero.", "note")
+    du_cat = RangeRef(DUP, du_hdr, du.col(0), du_hdr, du.col(L))
+    def du_rng(key: str) -> RangeRef:
+        return RangeRef(DUP, du_rows[key], du.col(0), du_rows[key], du.col(L))
+    du_chart_r = du.r + 2
+    book.set(DUP, du_chart_r - 1, 1, "Charts", "text", "section")
+    du.sh.charts.extend([
+        Chart("dupont_roe", "line", "Return on equity and return on assets by fiscal year", f"A{du_chart_r}",
+              [ChartSeries("Return on equity", du_rng("d_roe"), PURPLE), ChartSeries("Return on assets", du_rng("d_roa"), BLUE)], du_cat, "pct", "return",
+              note="ROE is blank in years with non-positive book equity."),
+        Chart("dupont_margins", "line", "DuPont margin drivers: net margin, EBIT margin, tax and interest burden", f"K{du_chart_r}",
+              [ChartSeries("Net margin", du_rng("d_net_margin"), NAVY), ChartSeries("EBIT margin", du_rng("d_ebit_margin"), ORANGE),
+               ChartSeries("Tax burden", du_rng("d_tax_burden"), GREEN), ChartSeries("Interest burden", du_rng("d_int_burden"), GOLD)], du_cat, "pct", "ratio"),
+        Chart("dupont_leverage", "bar", "DuPont efficiency and leverage: asset turnover and equity multiplier (x)", f"A{du_chart_r + 17}",
+              [ChartSeries("Asset turnover", du_rng("d_asset_turn"), BLUE), ChartSeries("Equity multiplier", du_rng("d_equity_mult"), PURPLE)], du_cat, "mult", "x"),
+    ])
+    du.sh.max_row = max(du.sh.max_row, du_chart_r + 34)
+    du.sh.col_widths = {1: 66, 2: 10}
 
     # =====================================================================
     # Altman Z family
@@ -648,9 +708,13 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rs.text(f"Interest coverage ({labels[L]})", "section")
     rc("ebit", f"EBIT ({units})", fin("operating_income", L))
     rc("interest", f"Interest expense ({units})", fin("interest_expense", L))
-    rc("has_interest", "Interest expense reported (1 = yes)", rat("has_interest", L), "int")
-    rc("coverage", "Interest coverage ratio (EBIT / interest expense)", IF(EQ(rtg("has_interest"), 1), rtg("ebit") / rtg("interest"), 0), "mult",
-       basis="Zero when interest expense is not reported; the rating then falls back to the EM score", bold=True)
+    rc("debt_free", "Debt-free (total debt is zero) with positive EBIT (1 = yes)",
+       IF(AND(LE(fin("total_debt", L), 0), GT(rtg("ebit"), 0)), 1, 0), "int", basis="Damodaran rates a company with no interest expense and no debt AAA")
+    rc("has_interest", "Coverage available (interest expense reported, or debt-free) (1 = yes)",
+       IF(OR(EQ(rat("has_interest", L), 1), EQ(rtg("debt_free"), 1)), 1, 0), "int")
+    rc("coverage", "Interest coverage ratio (EBIT / interest expense; 100,000 when debt-free)",
+       IF(GT(rtg("interest"), 0), rtg("ebit") / rtg("interest"), IF(EQ(rtg("debt_free"), 1), 100000, 0)), "mult",
+       basis="Zero when interest expense is not reported although the company carries debt; the rating then uses the fallback on Inputs", bold=True)
     rc("mcap_usd_bn", "Market capitalisation (USD billions)", inp("market_cap_usd_bn"), "num2")
     rc("is_large", "Large-firm table (1 = yes)", inp("is_large"), "int")
     rs.text("Rating", "section")
@@ -698,10 +762,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         return e
 
     rs.text("Rating-implied historical default rates (average cumulative default rates of the rating class)", "section")
-    rc("pd_1y", "1-year default rate", dr_lookup("1"), "pct2", bold=True)
-    rc("pd_3y", "3-year cumulative default rate", dr_lookup("3"), "pct2")
-    rc("pd_5y", "5-year cumulative default rate", dr_lookup("5"), "pct2", bold=True)
-    rc("pd_10y", "10-year cumulative default rate", dr_lookup("10"), "pct2")
+    rc("pd_1y", "1-year default rate of the rating class", dr_lookup("1"), "pct2", bold=True)
+    rc("pd_5y", "5-year cumulative default rate of the rating class", dr_lookup("5"), "pct2", bold=True)
     notch: Expr = lift(len(S.RATING_ORDER) - 1)
     for i in reversed(range(len(S.RATING_ORDER))):
         notch = IF(EQ(rtg("rating"), S.RATING_ORDER[i]), i, notch)
@@ -841,6 +903,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         ("kr_quick", "Quick ratio", rat("r_quick", L), "mult", ""),
         ("kr_cfo_debt", "Cash from operations / total debt", rat("r_cfo_debt", L), "pct", "Debt repayment capacity from operations"),
         ("kr_roa", "Return on assets", rat("r_roa", L), "pct", ""),
+        ("kr_roe", "Return on equity (DuPont)", dup("d_roe", L) if te_pos[L] else lift("n/a (negative equity)"), "pct", "Net margin x asset turnover x equity multiplier"),
         ("kr_runway", "Cash runway when free cash flow is negative (years)", rat("r_runway", L), "num1", "n/a when free cash flow is positive"),
         ("kr_vol", "Equity volatility (annualised)", mer("sigma_E"), "pct", "Feeds the Merton models"),
     ]:
@@ -1105,6 +1168,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
            INP: "Market inputs, model choices, every coefficient and threshold with its source, rating tables",
            FIN: "Reported statements from the source (millions) with the source field per line",
            RAT: "Liquidity, leverage, coverage, profitability, cash-flow and market-based ratios by year",
+           DUP: "DuPont decomposition of return on equity (three-step and five-step) by year, with charts",
            ALT: "Altman Z, Z' and Z'' with zones, EM score and bond-rating equivalent by year",
            PIO: "Nine Piotroski signals and the F-score by year", BEN: "Eight Beneish indices, M-score and manipulation flag by year",
            DIST: "Ohlson, Zmijewski, Springate, Grover and Taffler models by year",
@@ -1173,7 +1237,11 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
               "current": [num(RAT, "r_current", p) for p in H], "quick": [num(RAT, "r_quick", p) for p in H], "roa": [num(RAT, "r_roa", p) for p in H],
               "cfo_debt": [num(RAT, "r_cfo_debt", p) for p in H], "revenue": [num(FIN, "revenue", p) for p in H], "net_income": [num(FIN, "net_income", p) for p in H],
               "total_debt": [num(FIN, "total_debt", p) for p in H], "total_equity": [num(FIN, "total_equity", p) for p in H], "cash": [num(FIN, "cash_and_sti", p) for p in H],
-              "fcf": [num(RAT, "fcf", p) for p in H]}
+              "fcf": [num(RAT, "fcf", p) for p in H],
+              "roe": [num(DUP, "d_roe", p) for p in H], "net_margin": [num(DUP, "d_net_margin", p) for p in H],
+              "asset_turnover": [num(DUP, "d_asset_turn", p) for p in H], "equity_multiplier": [num(DUP, "d_equity_mult", p) for p in H],
+              "tax_burden": [num(DUP, "d_tax_burden", p) for p in H], "interest_burden": [num(DUP, "d_int_burden", p) for p in H],
+              "ebit_margin": [num(DUP, "d_ebit_margin", p) for p in H], "roa_dupont": [num(DUP, "d_roa", p) for p in H]}
     summary = {
         "company": name, "symbol": sym, "currency": ccy, "units": units, "sector": ds.profile.sector, "industry": ds.profile.industry,
         "exchange": ds.profile.exchange, "financial_sector": financial, "price": ds.market.price, "price_date": ds.market.price_date,
@@ -1204,6 +1272,11 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
                    "z2_ebit_shock": num(ALT, "z2_stress", L), "z2_ebit_zone": txt(ALT, "z2_stress_zone", L),
                    "equity_shock": R.values["stress_equity"], "vol_shock": R.values["stress_vol"], "ebit_shock": R.values["stress_ebit"]},
         "applicability": applicability,
+        "dupont": {"roe": num(DUP, "d_roe", L), "roe_five_step": num(DUP, "d_roe5", L), "net_margin": num(DUP, "d_net_margin", L),
+                   "asset_turnover": num(DUP, "d_asset_turn", L), "equity_multiplier": num(DUP, "d_equity_mult", L),
+                   "tax_burden": num(DUP, "d_tax_burden", L), "interest_burden": num(DUP, "d_int_burden", L),
+                   "ebit_margin": num(DUP, "d_ebit_margin", L), "roa": num(DUP, "d_roa", L), "leverage_effect": num(DUP, "d_leverage_effect", L),
+                   "roe_change": num(DUP, "d_roe_change", L)},
         "dq_status": txt(DQ, "overall_status"), "n_fail": num(DQ, "n_fail"), "n_flag": num(DQ, "n_flag"),
         "error_cells": {k: v for k, v in errors.items() if v}, "source": ds.source, "retrieved_at": ds.retrieved_at, "series": series,
         "vol_source": R.stats.get("source"), "n_returns": num(MER, "n_ret"),

@@ -222,45 +222,49 @@ MERTON = ModelSpec(
 # Synthetic rating (Damodaran) and rating-implied default rates
 # ---------------------------------------------------------------------------
 # (lower bound of interest coverage, rating, default spread). Descending; the last row catches everything below.
+# Coverage lower bounds are inclusive (Damodaran's own lookup is an approximate-match VLOOKUP on the lower bound).
+# Spreads are the January 2026 vector, identical across the large-firm and smaller/riskier-firm tables.
 DAMODARAN_LARGE: List[Tuple[float, str, float]] = [
-    (8.50, "AAA", 0.0059), (6.50, "AA", 0.0070), (5.50, "A+", 0.0092), (4.25, "A", 0.0107), (3.00, "A-", 0.0121),
-    (2.50, "BBB", 0.0147), (2.25, "BB+", 0.0205), (2.00, "BB", 0.0253), (1.75, "B+", 0.0335), (1.50, "B", 0.0428),
-    (1.25, "B-", 0.0571), (0.80, "CCC", 0.0895), (0.65, "CC", 0.1138), (0.20, "C", 0.1566), (float("-inf"), "D", 0.2001),
+    (8.50, "AAA", 0.0040), (6.50, "AA", 0.0055), (5.50, "A+", 0.0070), (4.25, "A", 0.0078), (3.00, "A-", 0.0089),
+    (2.50, "BBB", 0.0111), (2.25, "BB+", 0.0138), (2.00, "BB", 0.0184), (1.75, "B+", 0.0275), (1.50, "B", 0.0321),
+    (1.25, "B-", 0.0509), (0.80, "CCC", 0.0885), (0.65, "CC", 0.1261), (0.20, "C", 0.1600), (float("-inf"), "D", 0.1900),
 ]
 DAMODARAN_SMALL: List[Tuple[float, str, float]] = [
-    (12.50, "AAA", 0.0059), (9.50, "AA", 0.0070), (7.50, "A+", 0.0092), (6.00, "A", 0.0107), (4.50, "A-", 0.0121),
-    (4.00, "BBB", 0.0147), (3.50, "BB+", 0.0205), (3.00, "BB", 0.0253), (2.50, "B+", 0.0335), (2.00, "B", 0.0428),
-    (1.50, "B-", 0.0571), (1.25, "CCC", 0.0895), (0.80, "CC", 0.1138), (0.50, "C", 0.1566), (float("-inf"), "D", 0.2001),
+    (12.50, "AAA", 0.0040), (9.50, "AA", 0.0055), (7.50, "A+", 0.0070), (6.00, "A", 0.0078), (4.50, "A-", 0.0089),
+    (4.00, "BBB", 0.0111), (3.50, "BB+", 0.0138), (3.00, "BB", 0.0184), (2.50, "B+", 0.0275), (2.00, "B", 0.0321),
+    (1.50, "B-", 0.0509), (1.25, "CCC", 0.0885), (0.80, "CC", 0.1261), (0.50, "C", 0.1600), (float("-inf"), "D", 0.1900),
 ]
 # Default spread for every rating notch. Damodaran publishes spreads for the coverage-table ratings only; notches without a
 # published spread (AA+, AA-, BBB+, BBB-, BB-, CCC+, CCC-) are the midpoint of their neighbours.
 SPREAD_BY_RATING: Dict[str, float] = {
-    "AAA": 0.0059, "AA+": 0.0065, "AA": 0.0070, "AA-": 0.0081, "A+": 0.0092, "A": 0.0107, "A-": 0.0121, "BBB+": 0.0134, "BBB": 0.0147,
-    "BBB-": 0.0176, "BB+": 0.0205, "BB": 0.0253, "BB-": 0.0294, "B+": 0.0335, "B": 0.0428, "B-": 0.0571, "CCC+": 0.0733, "CCC": 0.0895,
-    "CCC-": 0.1017, "CC": 0.1138, "C": 0.1566, "D": 0.2001,
+    "AAA": 0.0040, "AA+": 0.0048, "AA": 0.0055, "AA-": 0.0063, "A+": 0.0070, "A": 0.0078, "A-": 0.0089, "BBB+": 0.0100, "BBB": 0.0111,
+    "BBB-": 0.0125, "BB+": 0.0138, "BB": 0.0184, "BB-": 0.0230, "B+": 0.0275, "B": 0.0321, "B-": 0.0509, "CCC+": 0.0697, "CCC": 0.0885,
+    "CCC-": 0.1073, "CC": 0.1261, "C": 0.1600, "D": 0.1900,
 }
-DAMODARAN_AS_OF = "January 2025"
+DAMODARAN_AS_OF = "January 2026"
 DAMODARAN_SOURCE = ("Damodaran, A., 'Ratings, Interest Coverage Ratios and Default Spread', NYU Stern, "
-                    f"pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ratings.html ({DAMODARAN_AS_OF} update).")
+                    f"pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/ratings.html and pc/ratings.xls ('Data used is as of {DAMODARAN_AS_OF}'); "
+                    "coverage lower bounds inclusive; the smaller/riskier-firm ranges come from the same workbook.")
 LARGE_FIRM_MCAP_USD_BN = 5.0
 
 # Rating -> average cumulative default rate (fraction) by horizon. Rating notch order is the risk ordinal used in the composite.
 RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-", "B+", "B", "B-",
                 "CCC+", "CCC", "CCC-", "CC", "C", "D"]
 # S&P Global Ratings, 'Default, Transition, and Recovery: 2024 Annual Global Corporate Default And Rating Transition Study'
-# (published 2025), global corporates 1981-2024, average cumulative default rates (%). Modifier ratings use their letter class.
+# (published 2025), Table 24: global corporate average cumulative default rates 1981-2024 (%). Modifier ratings use their letter class.
 SP_DEFAULT_RATES: Dict[str, Dict[str, float]] = {   # rating class -> {horizon years: rate}
-    "AAA": {"1": 0.0000, "3": 0.0013, "5": 0.0033, "10": 0.0068},
-    "AA": {"1": 0.0002, "3": 0.0011, "5": 0.0028, "10": 0.0065},
-    "A": {"1": 0.0005, "3": 0.0021, "5": 0.0045, "10": 0.0120},
-    "BBB": {"1": 0.0015, "3": 0.0065, "5": 0.0135, "10": 0.0300},
-    "BB": {"1": 0.0060, "3": 0.0350, "5": 0.0660, "10": 0.1250},
-    "B": {"1": 0.0318, "3": 0.1040, "5": 0.1550, "10": 0.2250},
-    "CCC": {"1": 0.2660, "3": 0.4100, "5": 0.4700, "10": 0.5200},
+    "AAA": {"1": 0.0000, "5": 0.0034},
+    "AA": {"1": 0.0002, "5": 0.0028},
+    "A": {"1": 0.0005, "5": 0.0039},
+    "BBB": {"1": 0.0014, "5": 0.0136},
+    "BB": {"1": 0.0056, "5": 0.0575},
+    "B": {"1": 0.0293, "5": 0.1560},
+    "CCC": {"1": 0.2612, "5": 0.4653},
 }
-SP_AS_OF = "1981-2024 averages (S&P Global Ratings 2024 default study)"
+SP_HORIZONS = ("1", "5")
+SP_AS_OF = "1981-2024 averages (S&P Global Ratings 2024 default study, Table 24)"
 SP_SOURCE = ("S&P Global Ratings (2025), 'Default, Transition, and Recovery: 2024 Annual Global Corporate Default And Rating "
-             "Transition Study', Table 'Global Corporate Average Cumulative Default Rates (1981-2024)'.")
+             "Transition Study', Table 24 'Global corporate average cumulative default rates (1981-2024)'.")
 
 
 def rating_class(rating: str) -> str:
