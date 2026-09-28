@@ -87,7 +87,8 @@ export function SearchBar({ providers, provider, setProvider, years, setYears, b
   const items: Item[] = useMemo(() => {
     if (searching) {
       const list: Item[] = hits.map((hit) => ({ kind: "hit", hit }));
-      if (!loading && searched === trimmed && !hits.some((h) => h.symbol.toLowerCase() === trimmed.toLowerCase())) list.push({ kind: "raw", q: trimmed });
+      // the raw query is only useful where a data source can resolve it; the pre-built site has nothing beyond its index
+      if (!staticMode && !loading && searched === trimmed && !hits.some((h) => h.symbol.toLowerCase() === trimmed.toLowerCase())) list.push({ kind: "raw", q: trimmed });
       return list;
     }
     return recent.map((recent) => ({ kind: "recent", recent }));

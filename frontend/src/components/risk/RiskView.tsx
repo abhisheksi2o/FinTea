@@ -33,8 +33,9 @@ export function RiskView({ r, busy, staticMode, staticNotice, onRebuild, onBasis
   const sheet = tab.startsWith("sheet:") ? sheets.find((sh) => `sheet:${sh.name}` === tab) : undefined;
   const dqTone = s.n_fail > 0 ? "bad" : s.n_flag > 0 ? "warn" : "good";
   const ver = r.verification;
-  const verTone = ver.status === "verified" ? "good" : ver.status === "mismatch" ? "bad" : "warn";
-  const verText = ver.status === "verified" ? `${ver.cells_checked.toLocaleString()} formulas verified by ${ver.engine ?? "LibreOffice"}` : ver.status === "mismatch" ? `${ver.n_mismatches ?? ver.mismatches.length} formula mismatch(es)` : `formula verification ${ver.status}`;
+  const sampled = ver.status === "skipped" && !!(r.static || r.client_generated);   // pre-built site: LibreOffice re-checks a nightly sample
+  const verTone = ver.status === "verified" ? "good" : ver.status === "mismatch" ? "bad" : sampled ? "muted" : "warn";
+  const verText = ver.status === "verified" ? `${ver.cells_checked.toLocaleString()} formulas verified by ${ver.engine ?? "LibreOffice"}` : ver.status === "mismatch" ? `${ver.n_mismatches ?? ver.mismatches.length} formula mismatch(es)` : sampled ? "formulas verified on the nightly sample; this report not individually re-checked" : `formula verification ${ver.status}`;
   const meta = [
     [s.sector, s.industry].filter(Boolean).join(" / "),
     s.price != null ? `${s.currency} ${fmtRisk(s.price, "price")} on ${s.price_date}` : null,

@@ -81,16 +81,25 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     mcap = g(INP, "market_cap")
     n_fail, n_flag, dq_status = g(DQ, "n_fail"), g(DQ, "n_flag"), t(DQ, "overall_status")
 
-    distress_votes = [("Altman Z''", zone2 == "Distress")] + ([("Ohlson", o_flag == "Distress")] if has_prior else []) + [
-                      ("Zmijewski", x_flag == "Distress"), ("Springate", s_flag == "Likely failure"), ("Grover", g_flag == "Bankrupt zone"),
-                      ("Taffler", t_flag == "At risk"), ("Merton naive DD", dd_naive is not None and dd_naive < 1.5)]
+    merton_vote = ("Merton naive DD", dd_naive is not None and dd_naive < 1.5)
+    if financial:   # accounting-ratio models are not applicable to banks and insurers
+        distress_votes = [merton_vote]
+    else:
+        distress_votes = [("Altman Z''", zone2 == "Distress")] + ([("Ohlson", o_flag == "Distress")] if has_prior else []) + [
+                          ("Zmijewski", x_flag == "Distress"), ("Springate", s_flag == "Likely failure"), ("Grover", g_flag == "Bankrupt zone"),
+                          ("Taffler", t_flag == "At risk"), merton_vote]
     n_votes = sum(1 for _, v in distress_votes if v)
     flagged = [n for n, v in distress_votes if v]
 
     sections: List[Dict[str, Any]] = []
     pts: List[str] = []
-    pts.append(f"{n_votes} of {len(distress_votes)} distress models classify {ds.profile.name} as distressed" + (f" ({', '.join(flagged)})." if flagged else ".")
-               + f" The distress signal index - an uncalibrated weighted average of the model signals, not a probability - is {_n(score, 1)} out of 100 ('{grade}' band).")
+    if financial:
+        pts.append(f"The accounting-ratio distress models are not applicable to a financial institution, so only the market-implied Merton model is counted: "
+                   f"it {'signals' if n_votes else 'does not signal'} distress for {ds.profile.name}. The distress signal index - {_n(score, 1)} out of 100 "
+                   f"('{grade}' band) - therefore rests on the Merton signal alone and is not a probability.")
+    else:
+        pts.append(f"{n_votes} of {len(distress_votes)} distress models classify {ds.profile.name} as distressed" + (f" ({', '.join(flagged)})." if flagged else ".")
+                   + f" The distress signal index - an uncalibrated weighted average of the model signals, not a probability - is {_n(score, 1)} out of 100 ('{grade}' band).")
     pts.append(f"Market-implied one-year probability of default (Merton naive distance to default) is {_p(pd_naive, 2)} at {_s(dd_naive)} standard deviations from the default point; "
                f"the accounting-based Ohlson and Zmijewski models put the probability at {_p(o_pd, 1)} and {_p(x_pd, 1)}"
                + (f", and the synthetic rating of {rating} corresponds to a historical one-year default rate of {_p(pd1, 2)} ({_p(pd5, 1)} over five years)." if not financial

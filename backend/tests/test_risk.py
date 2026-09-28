@@ -116,6 +116,7 @@ def test_single_year_and_financial_cases():
     assert wolf.summary["error_cells"] == {} and wolf.summary["composite_score"] > 50   # negative equity, heavy debt
     bank = build_risk_model(load_dataset("HDFCBANK.NS", "sample"))
     assert bank.summary["financial_sector"] is True
+    assert bank.summary["agreement_n"] == 1 and len(bank.feedback["distress_votes"]) == 1   # Merton only: accounting models not applicable
     assert bank.inputs.values["w_merton"] == 1.0 and bank.inputs.values["w_z2"] == 0.0
     assert abs(bank.summary["composite_score"] - bank.summary["sub_scores"]["sig_merton"]) < 1e-9
     assert bank.summary["default_spread"] is None and bank.summary["rating_source"].startswith("Not applicable")
@@ -289,3 +290,25 @@ def test_debt_free_company_has_no_error_cells_and_rates_aaa():
     assert r.book.num(RTG, "debt_free") == 1 and r.book.num(RTG, "coverage") == 100000 and r.book.num(RTG, "coverage_avg3") == 100000
     assert s["synthetic_rating"] == "AAA" and s["pd_rating_1y"] == 0.0 and s["default_point"] == 0.0
     assert r.book.val(RTG, "rating_avg3") == "AAA"
+    assert s["debt_free"] is True and s["interest_coverage"] is None        # the 100,000 sentinel never reaches the summary
+
+
+def test_share_counts_in_a_different_class_or_unit_are_reconciled():
+    """Yahoo sometimes reports shares outstanding in another share class (Berkshire A vs B, ASX CDIs) or 1,000x off (CME)."""
+    from fintea.providers import get_provider, normalize
+    raw = get_provider("sample").fetch("MSFT")
+    last = raw.periods[-1]
+    dil = last.fields["diluted_shares"]
+    last.fields["shares_outstanding"] = dil / 1000                      # 1,000x too small, like CME
+    raw.market.shares_outstanding = dil / 1000
+    raw.periods[0].fields["diluted_shares"] = raw.periods[0].fields["diluted_shares"] * 1000   # a mis-scaled year of the diluted series
+    ds = normalize(raw)
+    assert ds.periods[-1].fields["shares_outstanding"] == pytest.approx(dil)
+    assert ds.market.shares_outstanding == pytest.approx(dil)
+    assert ds.periods[0].fields["diluted_shares"] < 3 * dil
+    assert any("Share count reconciled" in n for n in ds.notes)
+    r = build_risk_model(ds)
+    assert r.summary["error_cells"] == {} and r.summary["market_cap"] == pytest.approx(ds.market.price * dil / M)
+    # an untouched dataset is left alone
+    clean = load_dataset("MSFT", "sample")
+    assert not any("Share count reconciled" in n for n in clean.notes)

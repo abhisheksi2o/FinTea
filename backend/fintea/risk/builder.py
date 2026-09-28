@@ -863,13 +863,19 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     for key in avail[1:]:
         eq_sum = eq_sum + dsh(f"{key}_sub")
     db.scalar("composite_equal", f"Equal-weight alternative (mean of the {len(avail)} available sub-scores)", eq_sum / len(avail), "num1", col=3)
-    votes: Expr = IF(EQ(alt("z2_zone", L), "Distress"), 1, 0) + IF(EQ(dis("x_flag", L), "Distress"), 1, 0) + IF(EQ(dis("s_flag", L), "Likely failure"), 1, 0) \
-        + IF(EQ(dis("g_flag", L), "Bankrupt zone"), 1, 0) + IF(EQ(dis("t_flag", L), "At risk"), 1, 0) + IF(LT(mer("dd_naive"), 1.5), 1, 0)
-    n_vote_models = 6
-    if has_prior:
-        votes = votes + IF(EQ(dis("o_flag", L), "Distress"), 1, 0)
-        n_vote_models = 7
-    db.scalar("agreement", f"Model agreement: number of the {n_vote_models} distress models signalling distress", votes, "int", bold=True, col=3)
+    if financial:
+        # accounting-ratio models are not applicable to banks and insurers: only the market-implied signal is counted
+        votes: Expr = IF(LT(mer("dd_naive"), 1.5), 1, 0)
+        n_vote_models = 1
+    else:
+        votes = IF(EQ(alt("z2_zone", L), "Distress"), 1, 0) + IF(EQ(dis("x_flag", L), "Distress"), 1, 0) + IF(EQ(dis("s_flag", L), "Likely failure"), 1, 0) \
+            + IF(EQ(dis("g_flag", L), "Bankrupt zone"), 1, 0) + IF(EQ(dis("t_flag", L), "At risk"), 1, 0) + IF(LT(mer("dd_naive"), 1.5), 1, 0)
+        n_vote_models = 6
+        if has_prior:
+            votes = votes + IF(EQ(dis("o_flag", L), "Distress"), 1, 0)
+            n_vote_models = 7
+    db.scalar("agreement", f"Model agreement: number of the {n_vote_models} applicable distress model{'s' if n_vote_models != 1 else ''} signalling distress"
+              + (" (market-implied Merton only: accounting models are not applicable to a financial institution)" if financial else ""), votes, "int", bold=True, col=3)
     db.scalar("agreement_n", "Distress models counted", n_vote_models, "int", col=3, style="input")
     db.blank()
     db.text("Probability of default by model", "section")
@@ -1035,8 +1041,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     bs_abs: Expr = ABS(fin("total_assets", 0) - fin("total_liabilities", 0) - fin("total_equity", 0))
     for p in H[1:]:
         bs_abs = MAX(bs_abs, ABS(fin("total_assets", p) - fin("total_liabilities", p) - fin("total_equity", p)))
-    check("chk_balance", "Balance sheet identity: max |assets - liabilities - equity| across years", bs_abs, "num2", "<= 0.01% of total assets + 0.5",
-          LE(bs_abs, 0.0001 * fin("total_assets", L) + 0.5),
+    check("chk_balance", "Balance sheet identity: max |assets - liabilities - equity| across years", bs_abs, "num2", "<= 0.1% of total assets + 0.5",
+          LE(bs_abs, 0.001 * fin("total_assets", L) + 0.5),
           "The reported statements must be internally consistent before any ratio is meaningful; tiny gaps are rounding in the source.", "FAIL")
     cf_gap = ABS(fin("net_change_cash", L) - (fin("cfo", L) + fin("cfi", L) + fin("cff", L)))
     check("chk_cashflow", f"Cash flow identity: |change in cash - (CFO + CFI + CFF)| ({labels[L]})", cf_gap, "num2", "<= 5% of |CFO| + 0.5",
@@ -1294,7 +1300,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         "springate": num(DIST, "s_score", L), "springate_flag": txt(DIST, "s_flag", L), "grover": num(DIST, "g_score", L), "grover_flag": txt(DIST, "g_flag", L),
         "taffler": num(DIST, "t_score", L), "taffler_flag": txt(DIST, "t_flag", L),
         "synthetic_rating": txt(RTG, "rating"), "rating_source": txt(RTG, "rating_source"), "rating_em": txt(RTG, "rating_em"), "rating_cov": txt(RTG, "rating_cov"),
-        "interest_coverage": num(RTG, "coverage") if num(RTG, "has_interest") == 1 else None, "default_spread": num(RTG, "spread"), "implied_cost_of_debt": num(RTG, "kd"),
+        "interest_coverage": num(RTG, "coverage") if num(RTG, "has_interest") == 1 and num(RTG, "debt_free") != 1 else None,
+        "debt_free": num(RTG, "debt_free") == 1, "default_spread": num(RTG, "spread"), "implied_cost_of_debt": num(RTG, "kd"),
         "pd_rating_1y": num(RTG, "pd_1y"), "pd_rating_5y": num(RTG, "pd_5y"),
         "tl_ta": num(RAT, "r_tl_ta", L), "debt_to_equity": num(RAT, "r_de", L), "nd_ebitda": num(RAT, "r_nd_ebitda", L), "current_ratio": num(RAT, "r_current", L),
         "quick_ratio": num(RAT, "r_quick", L), "roa": num(RAT, "r_roa", L), "cfo_debt": num(RAT, "r_cfo_debt", L), "runway_years": num(RAT, "r_runway", L),

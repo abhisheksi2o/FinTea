@@ -16,7 +16,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
   const labels = s.series?.labels ?? s.labels ?? [];
   const drivers = [
     { key: "tl_ta", label: "Leverage", measure: "total liabilities / total assets", fmt: "pct", latest: s.tl_ta, tone: s.tl_ta == null ? "muted" : s.tl_ta > 0.8 ? "bad" : s.tl_ta > 0.6 ? "warn" : "good" },
-    { key: "int_cov", label: "Coverage", measure: "EBIT / interest expense", fmt: "mult", latest: s.interest_coverage, tone: s.interest_coverage == null ? "muted" : s.interest_coverage < 1.5 ? "bad" : s.interest_coverage < 3 ? "warn" : "good" },
+    { key: "int_cov", label: "Coverage", measure: s.debt_free ? "EBIT / interest expense (no interest-bearing debt)" : "EBIT / interest expense", fmt: "mult", latest: s.debt_free ? null : s.interest_coverage, tone: s.debt_free ? "good" : s.interest_coverage == null ? "muted" : s.interest_coverage < 1.5 ? "bad" : s.interest_coverage < 3 ? "warn" : "good" },
     { key: "current", label: "Liquidity", measure: "current ratio", fmt: "mult", latest: s.current_ratio, tone: s.current_ratio == null ? "muted" : s.current_ratio < 1 ? "bad" : s.current_ratio < 1.5 ? "warn" : "good" },
   ] as const;
   const stress = stressRows(s);
@@ -42,7 +42,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
           sub={<>{fmtRisk(s.pd_rating_5y, "pct2")} cumulative over 5 years · historical default rates of the <b>{s.synthetic_rating ?? "n/a"}</b> class</>}>
           <Kv rows={[
             { k: "Rating basis", v: s.rating_source ?? "n/a" },
-            { k: "Interest coverage", v: s.interest_coverage == null ? "not reported" : `${fmtRisk(s.interest_coverage, "mult")} EBIT / interest` },
+            { k: "Interest coverage", v: s.debt_free ? "no debt: rated AAA by construction" : s.interest_coverage == null ? "not reported" : `${fmtRisk(s.interest_coverage, "mult")} EBIT / interest` },
             { k: "Default spread", v: fmtRisk(s.default_spread, "pct2"), note: s.implied_cost_of_debt != null ? `implied pre-tax cost of debt ${fmtRisk(s.implied_cost_of_debt, "pct2")}` : undefined },
             { k: "EM-score rating cross-check", v: <Pill tone={ratingTone(s.em_rating)}>{s.em_rating ?? "n/a"}</Pill> },
           ]} />
@@ -61,7 +61,11 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
       {/* (d) model agreement + (e) drivers */}
       <div className="two-col">
         <Section title="Model agreement" aside={<Pill tone={agreementTone}>{nDistress} of {nModels} signal distress</Pill>}>
-          <p className="lead"><b>{nDistress} of {nModels}</b> applicable distress models classify {s.company} as distressed.</p>
+          {s.financial_sector ? (
+            <p className="lead">The accounting-ratio distress models are not applicable to a financial institution, so only the market-implied Merton signal is counted: <b>{nDistress} of {nModels}</b>.</p>
+          ) : (
+            <p className="lead"><b>{nDistress} of {nModels}</b> applicable distress models classify {s.company} as distressed.</p>
+          )}
           <ul className="votes">
             {votes.map((v) => (
               <li key={v.model} className={`vote ${v.state}`}>
@@ -84,7 +88,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
                   <tr key={d.key}>
                     <th scope="row">{d.label}</th>
                     <td className="spark-cell">{vals.some(isNum) ? <Sparkline values={vals} width={110} height={28} /> : <span className="muted">n/a</span>}</td>
-                    <td className={`num tone-${d.tone}`}>{d.key === "int_cov" && d.latest == null ? "not reported" : fmtRisk(d.latest, d.fmt)}</td>
+                    <td className={`num tone-${d.tone}`}>{d.key === "int_cov" && d.latest == null ? (s.debt_free ? "no debt" : "not reported") : fmtRisk(d.latest, d.fmt)}</td>
                     <td className="muted">{d.measure}</td>
                   </tr>
                 );
@@ -130,7 +134,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
         <Stat label="Zmijewski probability" value={fmtRisk(s.zmijewski_pd, "pct")} sub={s.zmijewski_flag ?? "n/a"} tone={pdTone(s.zmijewski_pd)} />
         <Stat label="Piotroski F-score" value={s.piotroski == null ? "n/a" : `${fmtRisk(s.piotroski, "int")} / 9`} sub={s.piotroski_class ?? (s.has_prior_year ? "n/a" : "needs a prior fiscal year")} />
         <Stat label="Beneish M-score" tag="earnings quality" value={fmtRisk(s.beneish_m, "score")} sub={s.beneish_flag ?? (s.has_prior_year ? "n/a" : "needs a prior fiscal year")} tone={s.beneish_flag ? (s.beneish_flag.toLowerCase().includes("manipulation") ? "bad" : undefined) : undefined} />
-        <Stat label="Interest coverage" value={s.interest_coverage == null ? "not reported" : fmtRisk(s.interest_coverage, "mult")} sub={s.interest_coverage == null && s.interest_estimated_coverage != null ? `estimated ${fmtRisk(s.interest_estimated_coverage, "mult")} on imputed interest` : "EBIT / interest expense"} />
+        <Stat label="Interest coverage" value={s.debt_free ? "no debt" : s.interest_coverage == null ? "not reported" : fmtRisk(s.interest_coverage, "mult")} sub={s.debt_free ? "no interest-bearing debt; synthetic rating AAA by construction" : s.interest_coverage == null && s.interest_estimated_coverage != null ? `estimated ${fmtRisk(s.interest_estimated_coverage, "mult")} on imputed interest` : "EBIT / interest expense"} />
         <Stat label="Net debt / EBITDA" value={fmtRisk(s.nd_ebitda, "mult")} sub={s.nd_ebitda != null && s.nd_ebitda < 0 ? "net cash or negative EBITDA" : (s.base_label ?? "latest fiscal year")} />
         <Stat label="Equity volatility" value={fmtRisk(s.equity_vol, "pct")} sub={`${fmtRisk(s.n_returns, "int")} ${s.vol_source} returns, annualised`} />
         <Stat label="Market capitalisation" value={`${s.currency} ${fmtRisk(s.market_cap, "num")}m`} sub={s.market_cap_usd_bn != null ? `USD ${fmtRisk(s.market_cap_usd_bn, "num1")}bn · price ${fmtRisk(s.price, "price")} on ${s.price_date}` : undefined} />
