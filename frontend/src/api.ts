@@ -1,9 +1,9 @@
-import type { ModelResponse, Provider, RiskResponse, SearchResult } from "./types";
-import { STATIC, staticBuild, staticProviders, staticRebuild, staticSearch } from "./staticMode";
+import type { ModelResponse, Provider, RiskBasis, RiskResponse, SearchResult } from "./types";
+import { STATIC, staticBuild, staticProviders, staticRebuild, staticRisk, staticSearch } from "./staticMode";
 
 export const REPO_URL = "https://github.com/abhisheksi2o/FinTea";
 export const STATIC_RISK_NOTICE =
-  "Default risk analysis needs the full FinTea app: it fetches statements, prices and rates live, solves the Merton model and verifies the Excel report with LibreOffice, none of which can run on GitHub Pages.";
+  "This site serves default-risk reports that are pre-built nightly for its listed companies. Editing inputs re-solves the Merton model and re-verifies the workbook with LibreOffice on a server, so it needs the full FinTea app; the report here is read-only.";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -27,10 +27,10 @@ const live = {
   rebuild: (_base: ModelResponse, id: string, overrides: Record<string, unknown>, years?: number) =>
     post(`/api/models/${id}/rebuild`, { overrides, years, verify: true }).then((r) => json<ModelResponse>(r)),
   /** Default risk analysis: Altman / Ohlson / Zmijewski / Piotroski / Beneish / Merton / synthetic rating + verified Excel report. */
-  risk: (query: string, provider: string) =>
-    post("/api/risk", { query, provider, overrides: {}, verify: true, include_sheets: true }).then((r) => json<RiskResponse>(r)),
-  riskRebuild: (id: string, overrides: Record<string, unknown>) =>
-    post(`/api/risk/${id}/rebuild`, { overrides, verify: true, include_sheets: true }).then((r) => json<RiskResponse>(r)),
+  risk: (query: string, provider: string, basis: RiskBasis = "ltm") =>
+    post("/api/risk", { query, provider, overrides: {}, verify: true, include_sheets: true, basis }).then((r) => json<RiskResponse>(r)),
+  riskRebuild: (id: string, overrides: Record<string, unknown>, basis?: RiskBasis) =>
+    post(`/api/risk/${id}/rebuild`, { overrides, verify: true, include_sheets: true, basis }).then((r) => json<RiskResponse>(r)),
 };
 
 const stat: typeof live = {
@@ -39,8 +39,8 @@ const stat: typeof live = {
   search: async (q: string, _provider: string, _signal?: AbortSignal) => ({ results: await staticSearch(q) }),
   build: (query: string, _provider: string, _years: number) => staticBuild(query),
   rebuild: async (base: ModelResponse, _id: string, overrides: Record<string, unknown>, _years?: number) => staticRebuild(base, overrides),
-  risk: (_query: string, _provider: string) => Promise.reject(new Error(STATIC_RISK_NOTICE)),
-  riskRebuild: (_id: string, _overrides: Record<string, unknown>) => Promise.reject(new Error(STATIC_RISK_NOTICE)),
+  risk: (query: string, _provider: string, _basis?: RiskBasis) => staticRisk(query),
+  riskRebuild: (_id: string, _overrides: Record<string, unknown>, _basis?: RiskBasis) => Promise.reject(new Error(STATIC_RISK_NOTICE)),
 };
 
 export const api = STATIC ? stat : live;

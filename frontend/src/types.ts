@@ -58,10 +58,13 @@ export interface RiskSeries { labels: string[]; [key: string]: (number | null)[]
 export interface RiskStress { pd_equity_shock: number | null; pd_vol_shock: number | null; pd_both: number | null; z2_ebit_shock: number | null; z2_ebit_zone: string | null; equity_shock: number | null; vol_shock: number | null; ebit_shock: number | null }
 export interface ModelApplicability { model: string; status: string; missing: string[] }
 export interface RiskSubScores { sig_z2: number | null; sig_merton: number | null; sig_ohlson: number | null; sig_rating: number | null; sig_zmij: number | null; sig_pio: number | null; sig_cons: number | null }
+/** Which statements the latest column uses: the latest twelve months built from quarterly statements (when available) or the last fiscal year. */
+export type RiskBasis = "ltm" | "annual";
 export interface RiskSummary {
   company: string; symbol: string; currency: string; units: string; sector: string; industry: string; exchange: string;
   financial_sector: boolean; price: number | null; price_date: string; market_cap: number | null; market_cap_usd_bn: number | null;
   base_year: number; labels: string[]; nh: number; has_prior_year: boolean;
+  basis?: RiskBasis; ltm?: boolean; base_label?: string; balance_date?: string; n_annual?: number; periods_note?: string; basis_note?: string;
   composite_score: number | null; composite_grade: RiskGrade | string; composite_equal: number | null;
   agreement: number | null; agreement_n: number | null;
   pd_merton_naive: number | null; dd_naive: number | null; pd_naive_rf: number | null; dd_naive_rf: number | null;
@@ -91,4 +94,5 @@ export interface RiskResponse {
   inputs: { items: RiskInputItem[]; stats: Record<string, unknown> };
   feedback: RiskFeedback; verification: Verification; meta: Record<string, any>;
   merton: MertonSolve | null; download_url: string; sheets?: Sheet[]; charts?: ChartSpec[];
+  static?: boolean; client_generated?: boolean;
 }

@@ -7,19 +7,23 @@ import { SearchBar, type AppMode } from "./components/SearchBar";
 import { SheetGrid } from "./components/SheetGrid";
 import { SummaryCards } from "./components/SummaryCards";
 import { RiskView } from "./components/risk/RiskView";
-import type { ModelResponse, Provider, RiskResponse } from "./types";
+import type { ModelResponse, Provider, RiskBasis, RiskResponse } from "./types";
 
 const DCF_STEPS = ["Resolving company", "Fetching financial statements and prices", "Deriving assumptions", "Building linked three-statement model, beta, WACC and DCF", "Writing Excel workbook", "Verifying every formula with LibreOffice"];
 const RISK_STEPS = ["Resolving company", "Fetching statements, prices and rates", "Computing Altman, Ohlson, Zmijewski, Piotroski, Beneish, Springate, Grover and Taffler", "Solving the Merton model and the synthetic rating", "Writing the Excel report", "Verifying every formula with LibreOffice"];
 
 const MODE_KEY = "fintea.mode";
 const loadMode = (): AppMode => { try { return localStorage.getItem(MODE_KEY) === "risk" ? "risk" : "dcf"; } catch { return "dcf"; } };
+const BASIS_KEY = "fintea.risk.basis";
+const loadBasis = (): RiskBasis => { try { return localStorage.getItem(BASIS_KEY) === "annual" ? "annual" : "ltm"; } catch { return "ltm"; } };
+const GRADE_ORDER: Record<string, number> = { Severe: 0, High: 1, Moderate: 2, Low: 3, Minimal: 4 };
 
 export default function App() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [provider, setProvider] = useState("yahoo");
   const [years, setYears] = useState(5);
   const [mode, setModeState] = useState<AppMode>(loadMode);
+  const [basis, setBasisState] = useState<RiskBasis>(loadBasis);
   const [busy, setBusy] = useState(false);
   const [busyMode, setBusyMode] = useState<AppMode>("dcf");
   const [step, setStep] = useState(0);
@@ -34,6 +38,7 @@ export default function App() {
   const [gridQuery, setGridQuery] = useState("");
 
   const setMode = useCallback((m: AppMode) => { setModeState(m); setError(null); try { localStorage.setItem(MODE_KEY, m); } catch { /* ignore */ } }, []);
+  const setBasis = useCallback((b: RiskBasis) => { setBasisState(b); try { localStorage.setItem(BASIS_KEY, b); } catch { /* ignore */ } }, []);
 
   useEffect(() => {
     api.providers().then((r) => { setProviders(r.providers); setProvider(r.default); }).catch((e) => setError(String(e.message)));
@@ -55,7 +60,6 @@ export default function App() {
     finally { setBusy(false); }
   };
   const runRisk = async (fn: () => Promise<RiskResponse>) => {
-    if (STATIC) { setError(null); return; }   // the notice panel below explains; nothing to fail
     setBusy(true); setBusyMode("risk"); setError(null);
     try { setRisk(await fn()); }
     catch (e: any) { setError(e.message ?? String(e)); }
@@ -63,21 +67,31 @@ export default function App() {
   };
   const build = (q: string) => run(() => api.build(q, provider, years));
   const rebuild = (overrides: Record<string, unknown>, yrs: number) => { if (model) run(() => api.rebuild(model, model.parent_id ?? model.id, overrides, yrs)); };
-  const analyse = (q: string) => runRisk(() => api.risk(q, provider));
-  const rebuildRisk = (overrides: Record<string, unknown>) => { if (risk) runRisk(() => api.riskRebuild(risk.id, overrides)); };
+  const analyse = (q: string, b: RiskBasis = basis) => runRisk(() => api.risk(q, provider, b));
+  const rebuildRisk = (overrides: Record<string, unknown>) => { if (risk) runRisk(() => api.riskRebuild(risk.id, overrides, basis)); };
+  /** Switch between the latest-twelve-months and fiscal-year basis and re-run the same company. */
+  const switchBasis = (b: RiskBasis) => { setBasis(b); if (risk) analyse(risk.summary.symbol, b); };
   const submit = (q: string) => (mode === "risk" ? analyse(q) : build(q));
 
+  const saveBlob = (blob: Blob, filename: string) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
   const downloadEdited = async () => {
     if (!model) return;
     setExporting(true);
-    try {
-      const blob = await exportWorkbook(model);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `FinTea_${model.summary.symbol}_model_${model.summary.base_year}${model.parent_id ? "_edited" : ""}.xlsx`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    } catch (e: any) { setError(e.message ?? String(e)); }
+    try { saveBlob(await exportWorkbook(model), `FinTea_${model.summary.symbol}_model_${model.summary.base_year}${model.parent_id ? "_edited" : ""}.xlsx`); }
+    catch (e: any) { setError(e.message ?? String(e)); }
+    finally { setExporting(false); }
+  };
+  const downloadRisk = async () => {
+    if (!risk) return;
+    setExporting(true);
+    try { saveBlob(await exportWorkbook(risk), `FinTea_${risk.summary.symbol}_default_risk_${(risk.summary.base_label ?? String(risk.summary.base_year)).replace(/\s+/g, "_")}.xlsx`); }
+    catch (e: any) { setError(e.message ?? String(e)); }
     finally { setExporting(false); }
   };
 
@@ -98,10 +112,10 @@ export default function App() {
             <b>Hosted on GitHub Pages.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
-        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onSubmit={submit} staticMode={STATIC} mode={mode} setMode={setMode} />
-        {STATIC && mode === "risk" && (
+        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onSubmit={submit} staticMode={STATIC} mode={mode} setMode={setMode} basis={basis} setBasis={setBasis} />
+        {STATIC && mode === "risk" && !risk && !busy && (
           <div className="notice risk-static">
-            <b>Default risk analysis runs in the full app.</b> {STATIC_RISK_NOTICE} Clone the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a> and start it with <code>./run.sh</code> (or Docker) to analyse any listed company; the DCF models on this site keep working here.
+            <b>Pre-built default-risk reports.</b> {index ? `${(index.risk_count ?? index.models.filter((m) => m.risk).length).toLocaleString()} of the ${index.models.length.toLocaleString()} companies on this site have a report` : "The report index is loading"}, refreshed nightly on the latest-twelve-months basis where the quarterly statements allow it. Pick a company below or search. To analyse any other listed company, or to edit inputs and rebuild, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
         {busy && (
@@ -115,7 +129,7 @@ export default function App() {
         )}
         {error && <div className="error" role="alert">{error}</div>}
 
-        {showRisk && risk && <RiskView r={risk} busy={busy} staticMode={STATIC} staticNotice={STATIC_RISK_NOTICE} onRebuild={rebuildRisk} />}
+        {showRisk && risk && <RiskView r={risk} busy={busy} staticMode={STATIC} staticNotice={STATIC_RISK_NOTICE} onRebuild={rebuildRisk} onBasis={STATIC ? undefined : switchBasis} onExport={risk.download_url ? undefined : downloadRisk} exporting={exporting} />}
 
         {showDcf && model && (
           <>
@@ -205,6 +219,44 @@ export default function App() {
                     <div className="company-sym">{m.symbol} <span className="company-tag">{m.country}</span>{m.financial && <span className="company-tag fin">financial</span>}</div>
                     <div className="company-name">{m.name}</div>
                     <div className={`company-up ${m.implied_price > 0 && m.upside >= 0 ? "good" : "bad"}`}>{m.currency} {m.price.toLocaleString(undefined, { maximumFractionDigits: 2 })} → {m.implied_price.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({(m.upside * 100).toFixed(0)}%)</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {mode === "risk" && !risk && !busy && STATIC && index && (() => {
+          const q = gridQuery.trim().toLowerCase();
+          const list = index.models.filter((m) => (country === "All" || m.country === country) && (idxFilter === "All" || m.index.includes(idxFilter))
+            && (!q || m.symbol.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || (m.sector ?? "").toLowerCase().includes(q)));
+          const sorted = [...list].sort((a, b) => (a.risk ? GRADE_ORDER[a.risk.grade] ?? 9 : 9) - (b.risk ? GRADE_ORDER[b.risk.grade] ?? 9 : 9) || (b.risk?.score ?? -1) - (a.risk?.score ?? -1) || a.symbol.localeCompare(b.symbol));
+          const shown = sorted.slice(0, 96);
+          return (
+            <div className="browse">
+              <div className="browse-bar">
+                <select value={country} onChange={(e) => setCountry(e.target.value)}>
+                  <option value="All">All markets ({index.models.length})</option>
+                  {index.countries.map((c) => <option key={c} value={c}>{c} ({index.models.filter((m) => m.country === c).length})</option>)}
+                </select>
+                <select value={idxFilter} onChange={(e) => setIdxFilter(e.target.value)}>
+                  <option value="All">All indices</option>
+                  {index.indices.map((i) => <option key={i} value={i}>{i}</option>)}
+                </select>
+                <input className="browse-search" placeholder="Filter by name, symbol or sector" value={gridQuery} onChange={(e) => setGridQuery(e.target.value)} />
+                <span className="muted">Showing {shown.length} of {list.length}, highest distress signal first</span>
+              </div>
+              <div className="company-grid">
+                {shown.map((m) => (
+                  <button key={m.symbol} className={`company risk-card${m.risk ? "" : " missing"}`} onClick={() => analyse(m.symbol)} disabled={!m.risk} title={m.risk ? `${m.sector} · ${m.risk.basis}${m.risk.rating ? ` · synthetic rating ${m.risk.rating}` : ""}` : "No pre-built report for this company"}>
+                    <div className="company-sym">{m.symbol} <span className="company-tag">{m.country}</span>{m.financial && <span className="company-tag fin">financial</span>}</div>
+                    <div className="company-name">{m.name}</div>
+                    {m.risk ? (
+                      <div className="company-risk">
+                        <span className={`grade grade-${m.risk.grade.toLowerCase()}`}>{m.risk.grade}</span>
+                        <span className="muted">{Math.round(m.risk.score)}/100 · PD {m.risk.pd != null ? `${(m.risk.pd * 100).toFixed(m.risk.pd < 0.01 ? 2 : 1)}%` : "n/a"}{m.risk.ltm ? " · LTM" : ""}</span>
+                      </div>
+                    ) : <div className="company-risk muted">no report</div>}
                   </button>
                 ))}
               </div>

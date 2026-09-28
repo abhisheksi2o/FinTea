@@ -182,7 +182,7 @@ export function ChartCard({ spec, height, className }: { spec: ChartSpec; height
       {(spec.note || singlePoint || missing) && (
         <div className="chart-note">
           {spec.note}
-          {singlePoint && <> {spec.note ? "· " : ""}Only one fiscal year of statements is available, so the trend is a single point.</>}
+          {singlePoint && <> {spec.note ? "· " : ""}Only one period of statements is available, so the trend is a single point.</>}
           {missing && !singlePoint && <> {spec.note ? "· " : ""}Gaps mark years for which a model could not be computed (e.g. no prior-year data).</>}
         </div>
       )}

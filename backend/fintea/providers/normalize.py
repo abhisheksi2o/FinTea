@@ -19,7 +19,10 @@ def _set(p: FiscalPeriod, k: str, v: float, how: str, log: List[str]):
 def normalize(ds: FinancialDataset) -> FinancialDataset:
     log: List[str] = []
     prev: FiscalPeriod | None = None
-    for p in ds.periods:
+    todo = list(ds.periods) + ([ds.ltm] if ds.ltm is not None else [])
+    for p in todo:
+        if p is ds.ltm:
+            prev = ds.periods[-1] if ds.periods else None   # the LTM period follows the latest fiscal year
         for k in ALL_FIELDS:
             p.fields.setdefault(k, None)
         f = p.fields
@@ -115,7 +118,7 @@ def normalize(ds: FinancialDataset) -> FinancialDataset:
         if f["end_cash"] is None:
             _set(p, "end_cash", f["cash"], "balance sheet cash", log)
         if f["begin_cash"] is None:
-            if prev is not None and prev.fields.get("end_cash") is not None:
+            if prev is not None and p is not ds.ltm and prev.fields.get("end_cash") is not None:
                 _set(p, "begin_cash", prev.fields["end_cash"], "prior-year ending cash", log)
             else:
                 _set(p, "begin_cash", f["end_cash"] - (f["net_change_cash"] or (f["cfo"] + f["cfi"] + f["cff"])),

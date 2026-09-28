@@ -4,12 +4,14 @@
  * client-side with ExcelJS.
  */
 import { Engine } from "./engine";
-import type { AssumptionItem, ModelResponse, Provider, QuantCheck, SearchResult, Sheet } from "./types";
+import type { AssumptionItem, ModelResponse, Provider, QuantCheck, RiskResponse, SearchResult, Sheet } from "./types";
 
 export const STATIC = import.meta.env.VITE_STATIC === "1";
 
-export interface IndexEntry { symbol: string; name: string; country: string; index: string; sector: string; financial: boolean; currency: string; price: number; implied_price: number; upside: number; wacc: number; status: string; verification: string; cells_checked: number; provider: string; generated: string; json: string }
-export interface SiteIndex { generated: string; count: number; countries: string[]; indices: string[]; models: IndexEntry[]; failures: { symbol: string; name?: string; error: string }[] }
+/** Headline of the pre-built default-risk report (null when the report could not be built for that company). */
+export interface RiskIndexEntry { grade: string; score: number; pd: number | null; rating: string | null; z2: number | null; zone: string | null; basis: string; ltm: boolean; status: string; verification: string; cells_checked: number; json: string }
+export interface IndexEntry { symbol: string; name: string; country: string; index: string; sector: string; financial: boolean; currency: string; price: number; implied_price: number; upside: number; wacc: number; status: string; verification: string; cells_checked: number; provider: string; generated: string; json: string; risk?: RiskIndexEntry | null }
+export interface SiteIndex { generated: string; count: number; countries: string[]; indices: string[]; models: IndexEntry[]; failures: { symbol: string; name?: string; error: string }[]; risk_count?: number; risk_failures?: { symbol: string; name?: string; error: string }[] }
 
 /** Fetch a JSON document, transparently gunzipping *.json.gz (falls back to *.json). */
 export async function fetchJson<T>(url: string): Promise<T> {
@@ -46,15 +48,33 @@ export async function staticSearch(q: string): Promise<SearchResult[]> {
   return hits.map((m) => ({ symbol: m.symbol, name: m.name, exchange: `${m.country}${m.currency ? " · " + m.currency : ""}`, type: "EQUITY" })).slice(0, 12);
 }
 
+function findEntry(idx: SiteIndex, query: string): IndexEntry | undefined {
+  const q = query.trim().toLowerCase();
+  return idx.models.find((m) => m.symbol.toLowerCase() === q) ?? idx.models.find((m) => m.symbol.toLowerCase().startsWith(q))
+    ?? idx.models.find((m) => m.name.toLowerCase().includes(q));
+}
+
 export async function staticBuild(query: string): Promise<ModelResponse> {
   const idx = await loadIndex();
-  const q = query.trim().toLowerCase();
-  const hit = idx.models.find((m) => m.symbol.toLowerCase() === q) ?? idx.models.find((m) => m.symbol.toLowerCase().startsWith(q))
-    ?? idx.models.find((m) => m.name.toLowerCase().includes(q));
+  const hit = findEntry(idx, query);
   if (!hit) throw new Error(`"${query}" is not among the ${idx.models.length} pre-built companies on this site. Run FinTea locally (see the GitHub repository) to build any listed company live.`);
   const model = await fetchJson<ModelResponse>(hit.json);
   model.client_generated = true;
   return model;
+}
+
+/** Pre-built default-risk report (generated nightly by scripts/build_site.py, verified on a sample with LibreOffice). */
+export async function staticRisk(query: string): Promise<RiskResponse> {
+  const idx = await loadIndex();
+  const hit = findEntry(idx, query);
+  if (!hit) throw new Error(`"${query}" is not among the ${idx.models.length} pre-built companies on this site. Run FinTea locally (see the GitHub repository) to analyse any listed company live.`);
+  if (!hit.risk) {
+    const why = idx.risk_failures?.find((f) => f.symbol === hit.symbol)?.error;
+    throw new Error(`No pre-built default-risk report for ${hit.symbol}${why ? ` (${why})` : ""}. Run FinTea locally to analyse it live.`);
+  }
+  const r = await fetchJson<RiskResponse>(hit.risk.json);
+  r.client_generated = true; r.static = true; r.download_url = "";
+  return r;
 }
 
 /** Apply overrides to the Assumptions sheet, recalculate everything in the browser and refresh summary + checks. */
@@ -128,11 +148,17 @@ const FORMATS: Record<string, string> = {
 const NAVY = "FF1F3864";
 function colLetter(c: number): string { let s = ""; while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
 
-export async function exportWorkbook(model: ModelResponse): Promise<Blob> {
+/** Anything with sheets and book meta: a DCF model or a default-risk report. */
+export interface ExportableBook { sheets?: Sheet[]; meta: Record<string, any> }
+
+const DCF_NAMES: Record<string, [string, string]> = { WACC: ["WACC", "wacc"], ImpliedSharePrice: ["DCF", "implied_price"], EnterpriseValue: ["DCF", "enterprise_value"], SelectedBeta: ["Beta", "selected_beta"], TerminalGrowth: ["Assumptions", "terminal_growth"], TaxRate: ["Assumptions", "tax_rate"] };
+
+export async function exportWorkbook(model: ExportableBook): Promise<Blob> {
   const ExcelJS = await import("exceljs");
   const wb = new ExcelJS.Workbook();
   wb.creator = "FinTea"; wb.calcProperties.fullCalcOnLoad = true;
-  const named: Record<string, [string, string]> = { WACC: ["WACC", "wacc"], ImpliedSharePrice: ["DCF", "implied_price"], EnterpriseValue: ["DCF", "enterprise_value"], SelectedBeta: ["Beta", "selected_beta"], TerminalGrowth: ["Assumptions", "terminal_growth"], TaxRate: ["Assumptions", "tax_rate"] };
+  const named: Record<string, [string, string]> = (model.meta.defined_names as Record<string, [string, string]> | undefined) ?? DCF_NAMES;
+  const isRisk = model.meta.kind === "risk";
   for (const sh of model.sheets as Sheet[]) {
     const ws = wb.addWorksheet(sh.name, { properties: { tabColor: sh.tab_color ? { argb: "FF" + sh.tab_color } : undefined }, views: [{ showGridLines: false }] });
     for (const row of sh.rows) for (const c of row.cells) {
@@ -166,6 +192,13 @@ export async function exportWorkbook(model: ModelResponse): Promise<Blob> {
     for (const m of sh.merges ?? []) ws.mergeCells(m);
     for (const [r, h] of Object.entries(sh.row_heights ?? {})) ws.getRow(Number(r)).height = h;
     if (sh.freeze) { const m = /^([A-Z]+)(\d+)$/.exec(sh.freeze); if (m) { let x = 0; for (const ch of m[1]) x = x * 26 + (ch.charCodeAt(0) - 64); ws.views = [{ state: "frozen", xSplit: x - 1, ySplit: Number(m[2]) - 1, showGridLines: false }]; } }
+    if (isRisk && (sh.charts?.length ?? 0) > 0) {
+      // chart objects are drawn by the server-side writer; the browser export keeps every formula and the chart data blocks
+      const r = (sh.rows.length ? Math.max(...sh.rows.map((row) => row.r)) : 1) + 2;
+      const cell = ws.getCell(r, 1);
+      cell.value = `Note: this workbook was exported in the browser from the pre-built report; the ${sh.charts!.length} chart(s) of this sheet are not embedded here. The full FinTea app writes them as native Excel charts.`;
+      cell.font = { name: "Arial", size: 9, italic: true, color: { argb: "FF595959" } };
+    }
     ws.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
   }
   for (const [name, [sheet, key]] of Object.entries(named)) {

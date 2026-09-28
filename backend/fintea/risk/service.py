@@ -24,6 +24,7 @@ class StoredRisk:
     verification: Dict[str, Any]
     recalculated: Optional[bytes]
     provider: str
+    basis: str = "ltm"
     created: float = field(default_factory=time.time)
 
     def payload(self, include_sheets: bool = True) -> Dict[str, Any]:
@@ -61,19 +62,20 @@ class RiskService:
         return ds
 
     def build(self, query: str, provider: str = config.DEFAULT_PROVIDER, overrides: Optional[Dict[str, Any]] = None,
-              verify: bool = True) -> StoredRisk:
+              verify: bool = True, basis: str = "ltm") -> StoredRisk:
         ds = self.dataset(query, provider)
-        return self._build(ds, provider, overrides, verify)
+        return self._build(ds, provider, overrides, verify, basis)
 
-    def rebuild(self, risk_id: str, overrides: Optional[Dict[str, Any]] = None, verify: bool = True) -> StoredRisk:
+    def rebuild(self, risk_id: str, overrides: Optional[Dict[str, Any]] = None, verify: bool = True,
+                basis: Optional[str] = None) -> StoredRisk:
         base = self.get(risk_id)
         merged: Dict[str, Any] = {k: base.result.inputs.values[k] for k in base.result.inputs.overridden}
         merged.update(overrides or {})
-        return self._build(base.result.dataset, base.provider, merged, verify)
+        return self._build(base.result.dataset, base.provider, merged, verify, basis or base.basis)
 
-    def _build(self, ds: FinancialDataset, provider: str, overrides, verify: bool) -> StoredRisk:
-        inputs = derive_inputs(ds, overrides)
-        result = build_risk_model(ds, inputs)
+    def _build(self, ds: FinancialDataset, provider: str, overrides, verify: bool, basis: str = "ltm") -> StoredRisk:
+        inputs = derive_inputs(ds, overrides, basis)
+        result = build_risk_model(ds, inputs, basis=basis)
         xlsx = write_workbook(result.book)
         verification: Dict[str, Any] = {"status": "skipped", "reason": "verification disabled", "cells_checked": 0, "mismatches": []}
         recalculated = None
@@ -88,7 +90,7 @@ class RiskService:
             except Exception:
                 pass
         stored = StoredRisk(id=uuid.uuid4().hex[:12], result=result, xlsx=xlsx, verification=verification,
-                            recalculated=recalculated, provider=provider)
+                            recalculated=recalculated, provider=provider, basis=basis)
         with self._lock:
             self._items[stored.id] = stored
             while len(self._items) > config.MODEL_CACHE_SIZE:

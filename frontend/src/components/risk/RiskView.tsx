@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { ChartSpec, RiskResponse } from "../../types";
+import type { ChartSpec, RiskBasis, RiskResponse } from "../../types";
 import { SheetGrid } from "../SheetGrid";
 import { Pill } from "./Bits";
 import { ChartCard } from "./ChartCard";
@@ -12,12 +12,21 @@ import { RatiosTab } from "./RatiosTab";
 import { RiskInputsPanel } from "./RiskInputsPanel";
 import { fmtDate, fmtRisk, subScoreSpec, tidyChart } from "./riskUtils";
 
-interface Props { r: RiskResponse; busy: boolean; staticMode: boolean; staticNotice: string; onRebuild: (overrides: Record<string, unknown>) => void }
+interface Props {
+  r: RiskResponse; busy: boolean; staticMode: boolean; staticNotice: string; onRebuild: (overrides: Record<string, unknown>) => void;
+  /** Re-run the analysis on the other statement basis (live app only). */
+  onBasis?: (b: RiskBasis) => void;
+  /** Browser-side Excel export for pre-built (static) reports. */
+  onExport?: () => void; exporting?: boolean;
+}
 
 export const RISK_PANELS = ["Overview", "Charts", "Models", "Ratios", "DuPont", "Merton", "Inputs", "Data quality"] as const;
 
-export function RiskView({ r, busy, staticMode, staticNotice, onRebuild }: Props) {
+export function RiskView({ r, busy, staticMode, staticNotice, onRebuild, onBasis, onExport, exporting }: Props) {
   const s = r.summary;
+  const baseLabel = s.base_label ?? s.labels?.[s.labels.length - 1] ?? "n/a";
+  const ltmWanted = (s.basis ?? "ltm") === "ltm";
+  const canSwitch = !staticMode && !!onBasis && (s.ltm || s.basis === "annual");
   const [tab, setTab] = useState<string>("Overview");
   const charts: ChartSpec[] = useMemo(() => (r.charts ?? r.sheets?.flatMap((sh) => sh.charts ?? []) ?? []).map((c) => tidyChart(c, s)), [r.charts, r.sheets, s]);
   const sheets = r.sheets ?? [];
@@ -42,19 +51,31 @@ export function RiskView({ r, busy, staticMode, staticNotice, onRebuild }: Props
           <div className="risk-meta">{meta.map((m, i) => <span key={i}>{m}</span>)}</div>
         </div>
         <div className="downloads">
-          <a className="button primary" href={r.download_url} download>Download Excel report</a>
-          {!staticMode && ver.status === "verified" && (
+          {r.download_url ? (
+            <a className="button primary" href={r.download_url} download>Download Excel report</a>
+          ) : (
+            <button className="primary" onClick={onExport} disabled={!onExport || exporting} title="Written in your browser from the pre-built report: every formula and data block, without the native chart objects">{exporting ? "Writing workbook..." : "Download Excel report"}</button>
+          )}
+          {!staticMode && r.download_url && ver.status === "verified" && (
             <a className="button" href={`${r.download_url}?recalculated=1`} download title="Same workbook re-saved with cached values so previews (mail, Drive, phone) show numbers without recalculating">Download with cached values</a>
           )}
         </div>
       </div>
       <div className="status-strip">
-        <span className="asof">As of <b>{s.price_date}</b> (price) · statements to <b>{s.labels?.[s.labels.length - 1] ?? "n/a"}</b> · {s.source} · retrieved {fmtDate(s.retrieved_at)}{r.meta?.generated ? ` · analysed ${r.meta.generated}` : ""}</span>
+        <span className="asof">As of <b>{s.price_date}</b> (price) · statements to <b>{baseLabel}</b>{s.ltm && s.balance_date ? ` (balance sheet ${s.balance_date})` : ""} · {s.source} · retrieved {fmtDate(s.retrieved_at)}{r.meta?.generated ? ` · analysed ${r.meta.generated}` : ""}</span>
         <span className="badges">
+          <Pill tone={s.ltm ? "good" : "muted"} title={s.basis_note ?? undefined}>{s.ltm ? "Latest twelve months" : "Fiscal-year basis"}</Pill>
+          {canSwitch && (
+            <button type="button" className="linkish small" onClick={() => onBasis!(s.ltm ? "annual" : "ltm")} disabled={busy} title={s.ltm ? "Re-run on the last reported fiscal year" : "Re-run on the last four quarters"}>
+              {s.ltm ? "use fiscal year" : "use latest 12 months"}
+            </button>
+          )}
           <Pill tone={dqTone} title={`${fmtRisk(s.n_fail, "int")} failure(s), ${fmtRisk(s.n_flag, "int")} flag(s)`}>Data: {s.dq_status} · {fmtRisk(s.n_fail, "int")} fail / {fmtRisk(s.n_flag, "int")} flag</Pill>
           <Pill tone={verTone}>{verText}</Pill>
         </span>
       </div>
+      {s.ltm && s.periods_note && <div className="basis-note muted small">{s.periods_note}. Quarterly statements are unaudited; the year-over-year models compare the LTM column with the last fiscal year.</div>}
+      {!s.ltm && ltmWanted && s.basis_note && <div className="basis-note muted small">{s.basis_note}</div>}
       {s.financial_sector && (
         <div className="caveat">
           <b>Financial-sector company.</b> Altman, Ohlson, Zmijewski, Springate, Grover and Taffler were estimated on industrial firms; their ratios (working capital, liabilities / assets, EBIT coverage) are not meaningful for banks and insurers, whose leverage is the business model. Read the accounting scores as not applicable and rely on the market-implied (Merton) view, the rating and regulatory capital measures instead.

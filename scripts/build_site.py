@@ -6,7 +6,8 @@ Two phases so the work can be sharded across parallel CI runners:
   build   python scripts/build_site.py --out site --shard 3/10
           Builds every company of shard 3 (of 10) from data/universe.csv: fetches live data,
           builds the model, verifies a sample with LibreOffice, and writes
-          site/models/{SYMBOL}.json.gz plus site/shards/3.json (index entries + failures).
+          site/models/{SYMBOL}.json.gz and the default-risk report site/risk/{SYMBOL}.json.gz,
+          plus site/shards/3.json (index entries + failures).
 
   merge   python scripts/build_site.py --out site --merge --frontend-dist frontend/dist
           Combines site/shards/*.json into site/index.json and copies the static frontend in.
@@ -37,6 +38,7 @@ from fintea.excel import verify_workbook, write_workbook  # noqa: E402
 from fintea.model import build_model  # noqa: E402
 from fintea.model.llm import SYSTEM as COMMENTARY_PROMPT, ai_commentary, commentary_key  # noqa: E402
 from fintea.providers import get_provider, load_dataset, normalize  # noqa: E402
+from fintea.risk import build_risk_model, derive_inputs, stamp_verification  # noqa: E402
 
 UNIVERSE = ROOT / "data" / "universe.csv"
 FINANCIAL_WORDS = ("bank", "financ", "insur", "capital market", "reit", "real estate investment", "asset management",
@@ -66,6 +68,32 @@ def fetch_dataset(symbol: str, provider_id: str):
     """Fetch by exact symbol (no name search, so bulk builds never resolve to the wrong company)."""
     p = get_provider(provider_id)
     return normalize(p.fetch(symbol)), provider_id
+
+
+def build_risk(ds, used: str, symbol: str, verify: bool):
+    """Default-risk report payload (same shape as the API's /api/risk response) and its index entry."""
+    inputs = derive_inputs(ds)                       # latest-twelve-months basis when the quarterly data allows, else last fiscal year
+    res = build_risk_model(ds, inputs)
+    if res.summary.get("error_cells"):
+        raise ValueError(f"risk model has error cells: {res.summary.get('error_cells')}")
+    ver: Dict[str, Any] = {"status": "skipped", "reason": "sampled verification (this company was not in the sample)", "cells_checked": 0, "mismatches": []}
+    if verify:
+        xlsx = write_workbook(res.book)
+        ver = verify_workbook(res.book, xlsx)
+        ver.pop("recalculated", None)
+    stamp_verification(res, ver)
+    js = res.book.to_json()
+    s = res.summary
+    payload = {
+        "id": symbol.replace(".", "_"), "provider": used, "kind": "risk", "summary": s, "inputs": res.inputs.to_json(),
+        "feedback": res.feedback, "verification": ver, "meta": res.book.meta, "merton": res.merton, "download_url": "",
+        "client_generated": True, "static": True, "sheets": js["sheets"],
+        "charts": [c for sh in js["sheets"] for c in sh.get("charts", [])],
+    }
+    entry = {"grade": s["composite_grade"], "score": s["composite_score"], "pd": s["pd_merton_naive"], "rating": s["synthetic_rating"],
+             "z2": s["altman_z2"], "zone": s["altman_z2_zone"], "basis": s["base_label"], "ltm": bool(s["ltm"]), "status": s["dq_status"],
+             "verification": ver["status"], "cells_checked": ver.get("cells_checked", 0), "json": f"risk/{symbol}.json.gz"}
+    return payload, entry
 
 
 def build_one(row: Dict[str, str], provider: str, years: int, verify: bool):
@@ -109,8 +137,13 @@ def build_one(row: Dict[str, str], provider: str, years: int, verify: bool):
              "currency": res.summary["currency"], "price": res.summary["price"], "implied_price": res.summary["implied_price"],
              "upside": res.summary["upside"], "wacc": res.summary["wacc"], "status": res.summary["overall_status"],
              "verification": ver["status"], "cells_checked": ver.get("cells_checked", 0), "provider": used,
-             "generated": res.book.meta["generated"], "json": f"models/{symbol}.json.gz"}
-    return payload, entry, res
+             "generated": res.book.meta["generated"], "json": f"models/{symbol}.json.gz", "risk": None}
+    risk_payload, risk_error = None, ""
+    try:
+        risk_payload, entry["risk"] = build_risk(ds, used, symbol, verify)
+    except Exception as e:                            # the DCF model still ships; the index says the report is missing
+        risk_error = str(e)[:200]
+    return payload, entry, res, risk_payload, risk_error
 
 
 class Commentator:
@@ -184,8 +217,10 @@ def build_shard(rows: List[Dict[str, str]], out: Path, provider: str, years: int
                 shard_name: str, commentary_cache: Optional[Path] = None, commentary_max: int = 400) -> None:
     models = out / "models"
     models.mkdir(parents=True, exist_ok=True)
+    risk_dir = out / "risk"
+    risk_dir.mkdir(parents=True, exist_ok=True)
     (out / "shards").mkdir(parents=True, exist_ok=True)
-    index, failures = [], []
+    index, failures, risk_failures = [], [], []
     t_start = time.time()
     commentator = Commentator(commentary_cache, out, commentary_max)
     print(f"AI commentary: {'enabled' if commentator.enabled else 'disabled (no ANTHROPIC_API_KEY)'}; "
@@ -194,33 +229,45 @@ def build_shard(rows: List[Dict[str, str]], out: Path, provider: str, years: int
         sym = row["symbol"]
         t0 = time.time()
         try:
-            payload, entry, res = build_one(row, provider, years, should_verify(sym, verify_fraction))
+            payload, entry, res, risk_payload, risk_error = build_one(row, provider, years, should_verify(sym, verify_fraction))
         except Exception as e:
             print(f"[{i}/{len(rows)}] {sym}: FAILED {str(e)[:160]}", flush=True)
             failures.append({"symbol": sym, "name": row.get("name", ""), "error": str(e)[:200]})
             continue
         with gzip.open(models / f"{sym}.json.gz", "wt", encoding="utf-8", compresslevel=6) as f:
             json.dump(payload, f, separators=(",", ":"), default=str)
+        if risk_payload is not None:
+            with gzip.open(risk_dir / f"{sym}.json.gz", "wt", encoding="utf-8", compresslevel=6) as f:
+                json.dump(risk_payload, f, separators=(",", ":"), default=str)
+        else:
+            risk_failures.append({"symbol": sym, "name": row.get("name", ""), "error": risk_error})
         commentator.submit(sym, res, models / f"{sym}.json.gz")
         index.append(entry)
+        rk = entry.get("risk") or {}
+        risk_txt = (f"risk {rk['grade']} {rk['score']:.0f}/100 ({rk['basis']}, {rk['verification']})" if rk
+                    else f"risk FAILED {risk_error[:80]}")
         print(f"[{i}/{len(rows)}] {sym}: implied {entry['implied_price']:,.2f} vs {entry['price']:,.2f} {entry['currency']}, "
-              f"{entry['verification']} in {time.time() - t0:.1f}s", flush=True)
+              f"{entry['verification']}; {risk_txt} in {time.time() - t0:.1f}s", flush=True)
         if entry["verification"] == "mismatch":
             print(f"  VERIFICATION MISMATCH: {json.dumps(payload['verification'].get('mismatches', [])[:3])[:600]}", flush=True)
+        if rk.get("verification") == "mismatch" and risk_payload is not None:
+            print(f"  RISK VERIFICATION MISMATCH: {json.dumps(risk_payload['verification'].get('mismatches', [])[:3])[:600]}", flush=True)
         if provider != "sample":
             time.sleep(sleep)
     commentator.wait()
-    (out / "shards" / f"{shard_name}.json").write_text(json.dumps({"models": index, "failures": failures}, default=str))
-    print(f"shard {shard_name}: {len(index)} built, {len(failures)} failed, commentary {commentator.new} generated / "
+    (out / "shards" / f"{shard_name}.json").write_text(json.dumps({"models": index, "failures": failures, "risk_failures": risk_failures}, default=str))
+    print(f"shard {shard_name}: {len(index)} built, {len(failures)} failed, {len(index) - len(risk_failures)} risk reports "
+          f"({len(risk_failures)} failed), commentary {commentator.new} generated / "
           f"{commentator.reused} reused, in {(time.time() - t_start) / 60:.1f} min", flush=True)
 
 
 def merge(out: Path, frontend_dist: Optional[Path]) -> int:
-    index, failures = [], []
+    index, failures, risk_failures = [], [], []
     for p in sorted((out / "shards").glob("*.json")):
         d = json.loads(p.read_text())
         index.extend(d["models"])
         failures.extend(d["failures"])
+        risk_failures.extend(d.get("risk_failures", []))
     seen = set()
     dedup = []
     for m in sorted(index, key=lambda m: (m["country"], m["symbol"])):
@@ -233,6 +280,7 @@ def merge(out: Path, frontend_dist: Optional[Path]) -> int:
     (out / "index.json").write_text(json.dumps({
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), "count": len(dedup),
         "countries": countries, "indices": indices, "models": dedup, "failures": failures,
+        "risk_count": sum(1 for m in dedup if m.get("risk")), "risk_failures": risk_failures,
         "commentary_count": n_comment, "commentary_prompt": COMMENTARY_PROMPT,
         "commentary_model": os.environ.get("FINTEA_LLM_MODEL", "claude-opus-5")}, separators=(",", ":")))
     if frontend_dist and frontend_dist.exists():
@@ -244,7 +292,7 @@ def merge(out: Path, frontend_dist: Optional[Path]) -> int:
                 shutil.copy2(item, dest)
         print(f"copied frontend from {frontend_dist}")
     (out / ".nojekyll").write_text("")
-    print(f"merged: {len(dedup)} models, {len(failures)} failures -> {out / 'index.json'}")
+    print(f"merged: {len(dedup)} models ({sum(1 for m in dedup if m.get('risk'))} with risk reports), {len(failures)} failures -> {out / 'index.json'}")
     return len(dedup)
 
 

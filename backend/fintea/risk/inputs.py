@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..providers.base import FinancialDataset, PriceSeries
+from .periods import analysis_periods
 from .spec import COMPOSITE_SIGNALS, LARGE_FIRM_MCAP_USD_BN, is_financial
 
 M = 1e6
@@ -115,20 +116,23 @@ def equity_statistics(ds: FinancialDataset) -> Dict[str, Any]:
             "vol_monthly": vol_monthly}
 
 
-def derive_inputs(ds: FinancialDataset, overrides: Optional[Dict[str, Any]] = None) -> RiskInputs:
+def derive_inputs(ds: FinancialDataset, overrides: Optional[Dict[str, Any]] = None, basis: str = "ltm") -> RiskInputs:
     R = RiskInputs()
     V, B = R.values, R.basis
     st = equity_statistics(ds)
     R.stats.update(st)
-    last = ds.periods[-1]
+    A = analysis_periods(ds, basis)
+    last = A.last
     fy = last.fiscal_year
+    R.stats["basis"] = basis
+    R.stats["base_label"] = A.base_label
 
     V["price"] = float(ds.market.price)
     B["price"] = f"{ds.source} closing price on {ds.market.price_date} ({ds.market.currency})."
     if ds.market.fx_rate and ds.market.listing_currency and ds.market.listing_currency != ds.market.currency:
         B["price"] += f" Quoted {ds.market.listing_price:,.2f} {ds.market.listing_currency}, converted at {ds.market.fx_rate:,.4f}."
     V["shares_outstanding"] = float(ds.market.shares_outstanding) / M
-    B["shares_outstanding"] = f"Shares outstanding at the FY{fy} balance-sheet date reported by the source."
+    B["shares_outstanding"] = f"Shares outstanding reported by the source (latest balance sheet {A.balance_date})."
     fx = ds.market.fx_to_usd
     if fx is None:
         fx = 1.0

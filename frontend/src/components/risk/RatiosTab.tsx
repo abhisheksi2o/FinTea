@@ -37,7 +37,7 @@ export function RatiosTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[] 
         <Stat label="Debt / equity" value={fmtRisk(s.debt_to_equity, "mult")} sub={s.debt_to_equity != null && s.debt_to_equity < 0 ? "negative book equity" : "total debt / book equity"} />
         <Stat label="Quick ratio" value={fmtRisk(s.quick_ratio, "mult")} sub={`current ratio ${fmtRisk(s.current_ratio, "mult")}`} />
       </div>
-      <Section title="Ratio trends" aside={<span className="muted">{labels.length} fiscal year{labels.length === 1 ? "" : "s"} from the reported statements · negative values shown with a minus</span>}>
+      <Section title="Ratio trends" aside={<span className="muted">{s.n_annual ?? labels.length} fiscal year{(s.n_annual ?? labels.length) === 1 ? "" : "s"}{s.ltm ? " plus the latest twelve months" : ""} from the reported statements · negative values shown with a minus</span>}>
         <div className="table-scroll">
           <table className="ratios">
             <thead>

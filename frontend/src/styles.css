@@ -361,8 +361,9 @@ button.primary.big { padding: 10px 18px; font-size: 15px; }
   main { padding: 14px 14px 32px; }
   .search-top { flex-direction: column; align-items: stretch; }
   .mode-blurb { text-align: left; }
-  .search-row select { min-width: 0; flex: 1; }
-  .search-row .go { flex: 1; }
+  .search-row .search-input-wrap { flex: 1 1 100%; }   /* the search box takes the full row; source, basis and the action wrap below */
+  .search-row select { min-width: 0; flex: 1 1 140px; max-width: none; }
+  .search-row .go { flex: 1 1 160px; }
   .headline-grid, .two-col, .narrative-grid, .chart-grid, .welcome-grid { grid-template-columns: 1fr; }
   .index-body { grid-template-columns: 1fr; }
   .rsec-aside { max-width: 100%; text-align: left; }
@@ -374,6 +375,7 @@ button.primary.big { padding: 10px 18px; font-size: 15px; }
   .status-strip { flex-direction: column; align-items: flex-start; }
 }
 @media (max-width: 600px) {
+  .search-row .go { flex: 1 1 100%; }
   .tiles, .tiles.four { grid-template-columns: 1fr; }
   .vote { grid-template-columns: 14px 1fr auto; } .vote-detail { display: none; }
 }
@@ -407,3 +409,13 @@ button.primary.big { padding: 10px 18px; font-size: 15px; }
 .tabs button.sheet-tab { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .tabs button.sheet-tab svg { width: 13px; height: 13px; opacity: 0.7; }
 .tabs button.sheet-tab.active svg { opacity: 1; }
+
+/* pre-built risk reports grid (static site) */
+.company.risk-card.missing { opacity: 0.55; cursor: not-allowed; }
+.company-risk { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.grade { font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 10px; letter-spacing: 0.01em; }
+.grade-minimal, .grade-low { color: #1e6b36; background: #e2efda; }
+.grade-moderate { color: #7f6000; background: #fff2cc; }
+.grade-high, .grade-severe { color: #9c0006; background: #ffc7ce; }
+.basis-note { margin: 6px 0 10px; line-height: 1.45; }
+.linkish.small { font-size: 12px; padding: 0 2px; }

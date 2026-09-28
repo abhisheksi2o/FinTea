@@ -55,7 +55,7 @@ export function DuPontTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[] 
   const s = r.summary;
   const d = (s.dupont ?? {}) as Record<string, number | null | undefined>;
   const labels = s.series?.labels ?? s.labels ?? [];
-  const latest = labels[labels.length - 1] ?? "latest fiscal year";
+  const latest = s.base_label ?? labels[labels.length - 1] ?? "latest fiscal year";
   const negEquity = d.roe == null && isNum(d.net_margin);
   const dupontCharts = ["dupont_roe", "dupont_margins", "dupont_leverage"].map((id) => charts.find((c) => c.id === id)).filter((c): c is ChartSpec => !!c);
   const narrative = r.feedback.qualitative.find((q) => q.title.startsWith("Profitability"))?.points.filter((p) => p.startsWith("DuPont")) ?? [];
@@ -76,10 +76,10 @@ export function DuPontTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[] 
       <div className="tiles four">
         <Stat label="Return on assets" value={fmtRisk(d.roa, "pct")} sub="net margin × asset turnover" />
         <Stat label="Leverage contribution" value={fmtRisk(d.leverage_effect, "pct")} sub="ROE - ROA, percentage points" tone={isNum(d.leverage_effect) && d.equity_multiplier != null && d.equity_multiplier > 5 ? "warn" : undefined} />
-        <Stat label="Change in ROE" value={fmtRisk(d.roe_change, "pct")} sub={labels.length > 1 ? `${latest} vs ${labels[labels.length - 2]}` : "needs a prior fiscal year"} />
+        <Stat label="Change in ROE" value={fmtRisk(d.roe_change, "pct")} sub={labels.length > 1 ? `${latest} vs ${labels[labels.length - 2]}` : "needs a prior period"} />
         <Stat label="Equity multiplier" value={fmtRisk(d.equity_multiplier, "mult")} sub={isNum(d.equity_multiplier) && d.equity_multiplier > 5 ? "above 5x: most of the ROE comes from leverage" : "total assets / book equity"} tone={isNum(d.equity_multiplier) && d.equity_multiplier > 5 ? "warn" : undefined} />
       </div>
-      <Section title="Drivers by fiscal year" aside={<span className="muted">blank where book equity was not positive</span>}>
+      <Section title={s.ltm ? "Drivers by fiscal year and latest twelve months" : "Drivers by fiscal year"} aside={<span className="muted">blank where book equity was not positive</span>}>
         <div className="table-scroll">
           <table className="ratios">
             <thead><tr><th>Driver</th><th>Trend</th>{labels.map((l) => <th key={l} className="num">{l}</th>)}</tr></thead>

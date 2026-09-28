@@ -47,7 +47,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
             { k: "EM-score rating cross-check", v: <Pill tone={ratingTone(s.em_rating)}>{s.em_rating ?? "n/a"}</Pill> },
           ]} />
         </Stat>
-        <Stat className="headline" label="Altman Z''" tag="1995 model · latest fiscal year" value={fmtRisk(s.altman_z2, "score")} tone={zoneTone(s.altman_z2_zone)}
+        <Stat className="headline" label="Altman Z''" tag={`1995 model · ${s.base_label ?? "latest fiscal year"}`} value={fmtRisk(s.altman_z2, "score")} tone={zoneTone(s.altman_z2_zone)}
           sub={<><Pill tone={zoneTone(s.altman_z2_zone)}>{s.altman_z2_zone ? `${s.altman_z2_zone} zone` : "n/a"}</Pill> &nbsp;bond-rating equivalent <Pill tone={ratingTone(s.em_rating)}>{s.em_rating ?? "n/a"}</Pill></>}>
           <Kv rows={[
             { k: "Altman Z (market equity)", v: `${fmtRisk(s.altman_z, "score")} · ${s.altman_zone ?? "n/a"}` },
@@ -74,7 +74,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
           </ul>
           {fb.qualitative.find((q) => q.title === "Model agreement")?.points.slice(1).map((p, i) => <p key={i} className="muted">{p}</p>)}
         </Section>
-        <Section title="Drivers" aside={<span className="muted">{labels.length} fiscal year{labels.length === 1 ? "" : "s"}: {labels[0]}{labels.length > 1 ? ` - ${labels[labels.length - 1]}` : ""}</span>}>
+        <Section title="Drivers" aside={<span className="muted">{s.n_annual ?? labels.length} fiscal year{(s.n_annual ?? labels.length) === 1 ? "" : "s"}{s.ltm ? " + latest twelve months" : ""}: {labels[0]}{labels.length > 1 ? ` - ${labels[labels.length - 1]}` : ""}</span>}>
           <table className="drivers">
             <thead><tr><th>Driver</th><th>Trend</th><th className="num">Latest</th><th>Measure</th></tr></thead>
             <tbody>
@@ -131,7 +131,7 @@ export function OverviewTab({ r, charts }: { r: RiskResponse; charts: ChartSpec[
         <Stat label="Piotroski F-score" value={s.piotroski == null ? "n/a" : `${fmtRisk(s.piotroski, "int")} / 9`} sub={s.piotroski_class ?? (s.has_prior_year ? "n/a" : "needs a prior fiscal year")} />
         <Stat label="Beneish M-score" tag="earnings quality" value={fmtRisk(s.beneish_m, "score")} sub={s.beneish_flag ?? (s.has_prior_year ? "n/a" : "needs a prior fiscal year")} tone={s.beneish_flag ? (s.beneish_flag.toLowerCase().includes("manipulation") ? "bad" : undefined) : undefined} />
         <Stat label="Interest coverage" value={s.interest_coverage == null ? "not reported" : fmtRisk(s.interest_coverage, "mult")} sub={s.interest_coverage == null && s.interest_estimated_coverage != null ? `estimated ${fmtRisk(s.interest_estimated_coverage, "mult")} on imputed interest` : "EBIT / interest expense"} />
-        <Stat label="Net debt / EBITDA" value={fmtRisk(s.nd_ebitda, "mult")} sub={s.nd_ebitda != null && s.nd_ebitda < 0 ? "net cash or negative EBITDA" : "latest fiscal year"} />
+        <Stat label="Net debt / EBITDA" value={fmtRisk(s.nd_ebitda, "mult")} sub={s.nd_ebitda != null && s.nd_ebitda < 0 ? "net cash or negative EBITDA" : (s.base_label ?? "latest fiscal year")} />
         <Stat label="Equity volatility" value={fmtRisk(s.equity_vol, "pct")} sub={`${fmtRisk(s.n_returns, "int")} ${s.vol_source} returns, annualised`} />
         <Stat label="Market capitalisation" value={`${s.currency} ${fmtRisk(s.market_cap, "num")}m`} sub={s.market_cap_usd_bn != null ? `USD ${fmtRisk(s.market_cap_usd_bn, "num1")}bn · price ${fmtRisk(s.price, "price")} on ${s.price_date}` : undefined} />
       </div>

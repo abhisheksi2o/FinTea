@@ -200,6 +200,13 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
         pts.append("Interest expense is not reported by the source although the company carries debt: coverage ratios are unavailable and the rating falls back to the EM score.")
     if not has_prior:
         pts.append("Single fiscal year: trend-based models are unavailable and the remaining scores rest on one balance sheet.")
+    if book.meta.get("ltm"):
+        pts.append(f"{labels[L]} is a latest-twelve-months column built from quarterly statements (balance sheet at {book.meta.get('balance_date')}); "
+                   f"the year-over-year models compare it with {labels[L - 1]}, so their change terms span less than a full year of new information, "
+                   "and quarterly statements are unaudited.")
+    elif book.meta.get("basis") == "ltm":
+        pts.append("A latest-twelve-months column could not be built from the quarterly statements, so the latest column is the last fiscal year; "
+                   "results may lag recent quarters.")
     if R.stats.get("n_obs", 0) < (100 if R.stats.get("source") == "daily" else 24):
         pts.append("Short price history: the volatility estimate, and with it the Merton probabilities, is unreliable.")
     if te is not None and te <= 0:
@@ -211,7 +218,9 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
     sections.append({"title": "Caveats", "points": pts})
 
     pts = [f"Data status: {dq_status} ({int(n_fail or 0)} failure(s), {int(n_flag or 0)} flag(s)). Source: {ds.source}; retrieved {ds.retrieved_at[:10]}; "
-           f"{nh} fiscal years ({labels[0]} - {labels[L]}); price as of {ds.market.price_date}."]
+           f"{book.meta.get('periods_note') or f'{nh} periods ({labels[0]} - {labels[L]})'}; price as of {ds.market.price_date}."]
+    if book.meta.get("basis_note"):
+        pts.append(str(book.meta["basis_note"]))
     gaps = [a for a in (applicability or []) if a.get("missing")]
     if gaps:
         pts.append("Inputs not reported by the source and treated as zero or derived: " +

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { Provider, SearchResult } from "../types";
+import type { Provider, RiskBasis, SearchResult } from "../types";
 
 export type AppMode = "dcf" | "risk";
 
@@ -9,6 +9,7 @@ interface Props {
   years: number; setYears: (y: number) => void; busy: boolean;
   onSubmit: (query: string) => void; staticMode?: boolean;
   mode: AppMode; setMode: (m: AppMode) => void;
+  basis?: RiskBasis; setBasis?: (b: RiskBasis) => void;
 }
 
 interface Recent { q: string; name?: string; exchange?: string; at: number }
@@ -26,7 +27,7 @@ const saveRecent = (r: Recent[]) => { try { localStorage.setItem(RECENT_KEY, JSO
 
 const EXAMPLES: { label: string; q: string; staticOnly?: boolean; liveOnly?: boolean }[] = [
   { label: "Apple", q: "AAPL" }, { label: "Microsoft", q: "MSFT" }, { label: "Tesla", q: "TSLA" },
-  { label: "Reliance Industries", q: "RELIANCE.NS" }, { label: "Beyond Meat", q: "BYND", liveOnly: true },
+  { label: "Reliance Industries", q: "RELIANCE.NS" }, { label: "Beyond Meat", q: "BYND" },
   { label: "NVIDIA", q: "NVDA", staticOnly: true }, { label: "HDFC Bank", q: "HDFCBANK.NS" },
 ];
 
@@ -43,7 +44,7 @@ function Hi({ text, q }: { text: string; q: string }) {
   return <>{text.slice(0, i)}<mark>{text.slice(i, i + needle.length)}</mark>{text.slice(i + needle.length)}</>;
 }
 
-export function SearchBar({ providers, provider, setProvider, years, setYears, busy, onSubmit, staticMode, mode, setMode }: Props) {
+export function SearchBar({ providers, provider, setProvider, years, setYears, busy, onSubmit, staticMode, mode, setMode, basis = "ltm", setBasis }: Props) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -263,6 +264,13 @@ export function SearchBar({ providers, provider, setProvider, years, setYears, b
         {mode === "dcf" && (
           <select value={years} onChange={(e) => setYears(Number(e.target.value))} disabled={busy || staticMode} aria-label="Projection years" title={staticMode ? "Pre-built models use a 5-year horizon" : "Projection years"}>
             {[3, 4, 5, 6, 7, 8, 9, 10].map((y) => <option key={y} value={y}>{y} yrs</option>)}
+          </select>
+        )}
+        {mode === "risk" && (
+          <select value={basis} onChange={(e) => setBasis?.(e.target.value as RiskBasis)} disabled={busy || staticMode} aria-label="Statement basis"
+            title={staticMode ? "Pre-built reports use the latest twelve months wherever the quarterly statements allow it" : "Which statements the latest column uses: the last four quarters (latest twelve months) or the last fiscal year"}>
+            <option value="ltm">Latest 12 months</option>
+            <option value="annual">Latest fiscal year</option>
           </select>
         )}
         <button type="button" className={`primary go ${mode}`} onClick={() => submit(q)} disabled={busy || !trimmed}>{busy ? labels.busy : labels.action}</button>

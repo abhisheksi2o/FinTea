@@ -12,6 +12,7 @@ from fintea.providers import load_dataset
 from fintea.risk import RISK_SHEET_ORDER, build_risk_model, derive_inputs, naive_distance_to_default, solve_merton
 from fintea.risk.builder import ALT, DASH, DIST, DQ, DUP, MER, PIO, RTG, stamp_verification
 from fintea.risk.merton import norm_cdf
+from fintea.risk.periods import analysis_periods
 from fintea.risk import spec as S
 
 M = 1e6
@@ -46,8 +47,10 @@ def test_structure_and_no_errors(risk):
 
 def test_scores_match_independent_recomputation(risk):
     ds, b = risk.dataset, risk.book
-    L = len(ds.periods) - 1
-    f = {k: (v or 0.0) / M for k, v in ds.periods[L].fields.items()}
+    P = analysis_periods(ds).periods                     # fiscal years plus the LTM column when the snapshot carries quarterly data
+    L = len(P) - 1
+    assert risk.summary["nh"] == len(P)
+    f = {k: (v or 0.0) / M for k, v in P[L].fields.items()}
     ta = f["total_assets"]
     mve = ds.market.price * ds.market.shares_outstanding / M
     wc = f["current_assets"] - f["current_liabilities"]
@@ -87,7 +90,7 @@ def test_scores_match_independent_recomputation(risk):
 
 def test_dupont_identities(risk):
     ds, b = risk.dataset, risk.book
-    for p, per in enumerate(ds.periods):
+    for p, per in enumerate(analysis_periods(ds).periods):
         f = {k: (v or 0.0) / M for k, v in per.fields.items()}
         assert abs(b.num(DUP, "d_roa", p) - f["net_income"] / f["total_assets"]) < 1e-12
         if f["total_equity"] > 0:
@@ -103,7 +106,10 @@ def test_dupont_identities(risk):
 
 
 def test_single_year_and_financial_cases():
-    wolf = build_risk_model(load_dataset("WOLF", "sample"))
+    wolf_ds = load_dataset("WOLF", "sample")
+    wolf_ltm = build_risk_model(wolf_ds)                 # LTM column gives the post-emergence company a prior period to compare with
+    assert wolf_ltm.summary["nh"] == 2 and wolf_ltm.summary["has_prior_year"] is True and wolf_ltm.summary["piotroski"] is not None
+    wolf = build_risk_model(wolf_ds, basis="annual")     # fiscal-year basis: the single fresh-start year
     assert wolf.summary["nh"] == 1 and wolf.summary["has_prior_year"] is False
     assert wolf.summary["piotroski"] is None and wolf.summary["beneish_m"] is None and wolf.summary["ohlson_pd"] is None
     assert wolf.book.num(DASH, "sig_pio_w") == 0 and wolf.book.num(DASH, "sig_ohlson_w") == 0
@@ -185,3 +191,88 @@ def test_api_risk_endpoints():
     assert d.status_code == 200 and d.content[:2] == b"PK" and "default_risk" in d.headers["content-disposition"]
     assert client.post(f"/api/risk/{rid}/rebuild", json={"overrides": {"horizon": 99}}).status_code == 422
     assert client.get("/api/risk/nope").status_code == 404
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Latest-twelve-months basis (quarterly statements)
+# ---------------------------------------------------------------------------------------------------------------------
+from fintea.providers.base import FLOW_FIELDS, FiscalPeriod  # noqa: E402
+from fintea.risk.builder import FIN  # noqa: E402
+from fintea.risk.periods import analysis_periods, ltm_label  # noqa: E402
+
+
+def test_ltm_basis_uses_four_quarters_and_the_latest_balance_sheet():
+    ds = load_dataset("BYND", "sample")                     # fixture carries quarterly data: LTM newer than the last fiscal year
+    assert ds.ltm is not None and ds.ltm_meta["available"]
+    q = ds.ltm_meta["quarters"]
+    assert len(q) == 4 and ds.ltm.period_end == q[-1] and ds.ltm.period_end > ds.periods[-1].period_end
+    r = build_risk_model(ds)                                # default basis
+    s = r.summary
+    assert s["basis"] == "ltm" and s["ltm"] is True
+    assert s["labels"][-1] == ltm_label(ds.ltm.period_end) == s["base_label"]
+    assert s["labels"][:-1] == [f"FY{p.fiscal_year}A" for p in ds.periods]
+    assert s["nh"] == s["n_annual"] + 1 == len(ds.periods) + 1
+    assert s["error_cells"] == {} and s["balance_date"] == ds.ltm_meta["balance_date"]
+    L = s["nh"] - 1
+    # the Financials sheet carries the LTM values: summed flows and the quarter-end balance sheet
+    assert r.book.val(FIN, "revenue", L) == pytest.approx(ds.ltm.fields["revenue"] / M)
+    assert r.book.val(FIN, "total_assets", L) == pytest.approx(ds.ltm.fields["total_assets"] / M)
+    assert r.book.val(FIN, "revenue", L - 1) == pytest.approx(ds.periods[-1].fields["revenue"] / M)
+    assert ds.ltm.source_fields["revenue"].startswith("LTM: sum of 4 quarters")
+    # year-over-year models compare the LTM column with the last fiscal year
+    assert s["piotroski"] is not None and s["has_prior_year"]
+    assert "LTM" in s["basis_note"] or "Latest-twelve-months" in s["basis_note"]
+    assert any("latest-twelve-months" in p.lower() for sec in r.feedback["qualitative"] if sec["title"] == "Caveats" for p in sec["points"])
+    # the fiscal-year basis is still available and differs
+    r2 = build_risk_model(ds, basis="annual")
+    s2 = r2.summary
+    assert s2["ltm"] is False and s2["labels"] == s["labels"][:-1] and s2["base_label"] == f"FY{ds.periods[-1].fiscal_year}A"
+    assert "available with the LTM basis" in s2["basis_note"]
+    assert s2["altman_z2"] != pytest.approx(s["altman_z2"])
+
+
+def test_ltm_falls_back_to_the_fiscal_year_when_quarterly_data_is_insufficient():
+    ds = load_dataset("HDFCBANK.NS", "sample")             # only three quarterly income statements in the snapshot
+    assert ds.ltm is None and ds.ltm_meta.get("available") is False
+    r = build_risk_model(ds)
+    s = r.summary
+    assert s["basis"] == "ltm" and s["ltm"] is False and s["labels"][-1] == f"FY{ds.periods[-1].fiscal_year}A"
+    assert "not available" in s["basis_note"]
+    assert any("could not be built" in p for sec in r.feedback["qualitative"] if sec["title"] == "Caveats" for p in sec["points"])
+    assert any("Latest-twelve-months basis not available" in n for n in ds.notes)
+
+
+def test_analysis_periods_drops_an_ltm_that_is_not_newer_than_the_fiscal_year():
+    ds = load_dataset("MSFT", "sample")
+    last = ds.periods[-1]
+    ds.ltm = FiscalPeriod(period_end=last.period_end, fields=dict(last.fields), source_fields=dict(last.source_fields))
+    ds.ltm_meta = {"available": True, "quarters": ["x"] * 4, "balance_date": last.period_end}
+    A = analysis_periods(ds, "ltm")
+    assert A.ltm is False and A.labels[-1] == f"FY{last.fiscal_year}A"
+    with pytest.raises(ValueError):
+        analysis_periods(ds, "quarterly")
+    assert ltm_label("2026-06-30") == "LTM Jun-26" and ltm_label("2025-12-31") == "LTM Dec-25"
+
+
+def test_ltm_normalisation_never_takes_beginning_cash_from_the_fiscal_year_end():
+    ds = load_dataset("WOLF", "sample")
+    assert ds.ltm is not None
+    # flows are sums, stocks are point-in-time: shares are not summed
+    assert "diluted_shares" not in FLOW_FIELDS and "net_income" in FLOW_FIELDS
+    f = ds.ltm.fields
+    assert f["begin_cash"] is not None and f["end_cash"] is not None
+    assert abs(f["begin_cash"] + f["net_change_cash"] - f["end_cash"]) <= 0.005 * abs(f["end_cash"]) + 0.5e6
+    assert not ds.ltm.source_fields.get("begin_cash", "").startswith("derived: prior-year")
+
+
+def test_api_accepts_the_basis_option():
+    r = client.post("/api/risk", json={"query": "BYND", "provider": "sample", "verify": False, "include_sheets": False, "basis": "annual"})
+    assert r.status_code == 200, r.text
+    js = r.json()
+    assert js["summary"]["ltm"] is False and js["summary"]["basis"] == "annual"
+    rid = js["id"]
+    r2 = client.post(f"/api/risk/{rid}/rebuild", json={"overrides": {}, "verify": False, "include_sheets": False, "basis": "ltm"})
+    assert r2.status_code == 200 and r2.json()["summary"]["ltm"] is True
+    d = client.get(f"/api/risk/{r2.json()['id']}/download")
+    assert d.status_code == 200 and "LTM_" in d.headers["content-disposition"]
+    assert client.post("/api/risk", json={"query": "BYND", "provider": "sample", "basis": "quarterly"}).status_code == 422

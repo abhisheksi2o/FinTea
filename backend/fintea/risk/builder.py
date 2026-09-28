@@ -23,6 +23,7 @@ from ..sheet.expr import lift
 from . import spec as S
 from .inputs import RISK_INPUT_SPECS, RiskInputs, derive_inputs
 from .merton import solve_merton
+from .periods import analysis_periods
 
 COVER, ASSESS, DASH, INP, FIN, RAT, DUP, ALT, PIO, BEN, DIST, MER, RTG, DQ = (
     "Cover", "Assessment", "Dashboard", "Inputs", "Financials", "Ratios", "DuPont", "Altman Z", "Piotroski F", "Beneish M",
@@ -68,14 +69,14 @@ class RiskResult:
     merton: Optional[Dict[str, Any]]
 
 
-def _fy_end_prices(ds: FinancialDataset, L: int) -> List[Optional[float]]:
-    """Month-end close nearest each fiscal year end, in the reporting currency; None for the latest year (current price)."""
+def _fy_end_prices(ds: FinancialDataset, periods: List[Any], L: int) -> List[Optional[float]]:
+    """Month-end close nearest each period end, in the reporting currency; None for the latest period (current price)."""
     ms = ds.stock_prices
     factor = 1.0
     if ds.market.listing_price and ds.market.listing_price > 0:
         factor = ds.market.price / ds.market.listing_price   # minor-unit and FX conversion the provider applied to the price
     out: List[Optional[float]] = []
-    for i, per in enumerate(ds.periods):
+    for i, per in enumerate(periods):
         if i == L:
             out.append(None)
             continue
@@ -104,25 +105,32 @@ def _days_between(a: str, b: str) -> int:
 
 
 def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
-                     overrides: Optional[Dict[str, Any]] = None) -> RiskResult:
-    if len(ds.periods) < 1:
-        raise ValueError("No annual financial statements are available for the default-risk analysis")
-    R = inputs or derive_inputs(ds, overrides)
-    nh = len(ds.periods)
+                     overrides: Optional[Dict[str, Any]] = None, basis: str = "ltm") -> RiskResult:
+    """basis: "ltm" (default) adds a latest-twelve-months column from the quarterly statements when the provider supplied
+    one that is newer than the last fiscal year; "annual" analyses the reported fiscal years only."""
+    if inputs is not None:
+        basis = str(inputs.stats.get("basis") or basis)   # the inputs were derived on a basis; the book must match it
+    A = analysis_periods(ds, basis)
+    P = A.periods
+    R = inputs or derive_inputs(ds, overrides, basis)
+    nh = len(P)
     H = list(range(nh))
     L = nh - 1
     P1 = H[1:]                                   # periods with a prior year
     has_prior = nh >= 2                          # Piotroski, Beneish and Ohlson need year-over-year changes
-    labels = [f"FY{p.fiscal_year}A" for p in ds.periods]
-    dates = [p.period_end for p in ds.periods]
+    labels = list(A.labels)
+    dates = A.dates
     name, sym, ccy = ds.profile.name, ds.profile.symbol, ds.profile.currency
     units = f"{ccy} millions"
-    base_year = ds.periods[L].fiscal_year
+    base_year = P[L].fiscal_year
+    base_label = A.base_label
     financial = S.is_financial(ds.profile.sector, ds.profile.industry)
     generated = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     book = Book()
     book.meta = {"company": name, "symbol": sym, "currency": ccy, "units": units, "labels": labels, "dates": dates,
                  "nh": nh, "np": 0, "source": ds.source, "generated": generated, "kind": "risk",
+                 "basis": A.basis, "ltm": A.ltm, "base_label": base_label, "balance_date": A.balance_date,
+                 "periods_note": A.describe(), "basis_note": A.note,
                  "title": f"{name} default risk analysis",
                  "defined_names": {"CompositeRiskScore": (DASH, "composite_score"), "NaiveDefaultProbability": (MER, "pd_naive"),
                                    "SyntheticRating": (RTG, "rating"), "MarketCap": (INP, "market_cap"), "AltmanZ2": (DASH, "sig_z2_value")}}
@@ -254,21 +262,24 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     fs.header("Reported line item", "Source field")
 
     def raw(key: str, scale: float = M):
-        return lambda p: (ds.periods[p].fields.get(key) or 0.0) / scale
+        return lambda p: (P[p].fields.get(key) or 0.0) / scale
 
     for title, keys in FIN_GROUPS:
         fs.section(title)
         for k in keys:
             fmt = "num1" if "shares" in k else "num"
-            fs.row(k, FIELD_LABELS[k], raw(k), fmt, style="input", note=ds.periods[L].source_fields.get(k, ""))
-    fs.section("Market data by fiscal year")
-    fy_px = _fy_end_prices(ds, L)
-    fs.row("fy_price", f"Share price ({ccy}; fiscal-year-end month close, latest year = current price)",
+            fs.row(k, FIELD_LABELS[k], raw(k), fmt, style="input", note=P[L].source_fields.get(k, ""))
+    fs.section("Market data by period")
+    fy_px = _fy_end_prices(ds, P, L)
+    fs.row("fy_price", f"Share price ({ccy}; period-end month close, latest column = current price)",
            lambda p: inp("price") if p == L else fy_px[p], "price", note="Monthly price series; latest year links to Inputs")
     fs.row("mve", f"Market value of equity ({units})", lambda p: fin("fy_price", p) * fin("shares_outstanding", p), "num",
            note="Price x shares outstanding at the period end")
     fs.blank()
     fs.text("All statement values are hard-coded inputs from the data source (millions); derived items are marked 'derived' in the source column.", "note")
+    if A.ltm:
+        fs.text(f"{base_label}: income and cash-flow items are the sum of the four quarters {', '.join(A.ltm_meta.get('quarters', []))}; "
+                f"balance-sheet items are as at {A.balance_date}; beginning cash is the ending cash of the quarter before the four.", "note", wrap=True, merge_to=4)
     fs.sh.col_widths = {1: 50, 2: 42}
 
     # =====================================================================
@@ -349,7 +360,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     du.title("DuPont analysis", f"{name} - return on equity decomposed into margin, asset efficiency and leverage (ending balances)")
     du_hdr = du.r
     du.header("", "")
-    te_pos = [((ds.periods[p].fields.get("total_equity") or 0.0) > 0) for p in H]   # ROE is undefined with non-positive book equity
+    te_pos = [((P[p].fields.get("total_equity") or 0.0) > 0) for p in H]   # ROE is undefined with non-positive book equity
 
     def if_eq(p: int, expr: Expr):
         return expr if te_pos[p] else None
@@ -599,7 +610,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     def sc(key: str, label: str, content: Any, fmt: str = "num", basis: str = "", bold: bool = False, style: Optional[str] = None) -> None:
         mt.scalar(key, label, content, fmt, basis=basis, bold=bold, style=style)
 
-    mt.text(f"Inputs (FY{base_year} balance sheet, current market data)", "section")
+    mt.text(f"Inputs ({base_label} balance sheet at {A.balance_date}, current market data)", "section")
     sc("E", f"Market value of equity E ({units})", inp("market_cap"), "num", basis="Inputs: price x shares")
     sc("std", f"Short-term debt and current leases ({units})", fin("short_term_debt", L))
     sc("ltd", f"Long-term debt and leases ({units})", fin("long_term_debt", L))
@@ -635,7 +646,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     sc("pd_naive_rf", "Naive probability of default with mu = risk-free rate", NORMSDIST(-mer("dd_naive_rf")), "pct2")
     mt.text("Iterated Merton model (asset value and volatility solved in Python; formulas below re-derive equity value and volatility as a check)", "section")
     E_val = R.values["price"] * R.values["shares_outstanding"]
-    fl = ds.periods[L].fields
+    fl = P[L].fields
     std_v, ltd_v = (fl.get("short_term_debt") or 0.0) / M, (fl.get("long_term_debt") or 0.0) / M
     F_val = {1: std_v + S.MERTON.coefs[2].value * ltd_v, 2: (fl.get("total_debt") or 0.0) / M, 3: (fl.get("total_liabilities") or 0.0) / M}[int(R.values["default_point_method"])]
     sigma_E_val = R.stats["vol"] if int(R.values["equity_vol_method"]) == 1 else float(R.values["equity_vol_manual"])
@@ -1036,7 +1047,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     check("chk_interest", "Interest expense reported when the company carries debt", fin("interest_expense", L), "num", "> 0 if total debt > 0",
           OR(GT(fin("interest_expense", L), 0), LE(fin("total_debt", L), 0)),
           "Without interest expense the coverage-based rating cannot be computed; the rating falls back to the Altman EM score.")
-    re_reported = 0 if str(ds.periods[L].source_fields.get("retained_earnings", "")).startswith("derived") else 1
+    re_reported = 0 if str(P[L].source_fields.get("retained_earnings", "")).startswith("derived") else 1
     check("chk_re", "Retained earnings reported by the source (1 = yes)", re_reported, "int", "= 1", EQ(K(DQ, "chk_re"), 1),
           "Altman's X2 is retained earnings / total assets; when unreported it is zero, which understates Z for mature companies.")
     check("chk_shares", "Shares outstanding vs diluted weighted-average shares (relative difference)",
@@ -1047,14 +1058,15 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     check("chk_mcap_book", "Market capitalisation / book equity", mcap_ratio, "mult", "0.02x - 1,000x or negative equity",
           OR(LE(fin("total_equity", L), 0), AND(GE(mcap_ratio, 0.02), LE(mcap_ratio, 1000))),
           "A ratio far outside this band usually means the quoted price and the share count refer to different share classes or units.")
-    age_m = _months_between(ds.periods[L].period_end, ds.retrieved_at[:10])
-    check("chk_age", "Months since the latest fiscal year end", age_m, "int", "<= 18", LE(K(DQ, "chk_age"), 18),
-          "Accounting-based scores describe the balance sheet at the fiscal year end; stale statements miss recent deterioration.")
+    age_m = _months_between(A.balance_date, ds.retrieved_at[:10])
+    max_age = 9 if A.ltm else 18
+    check("chk_age", f"Months since the latest balance-sheet date ({A.balance_date})", age_m, "int", f"<= {max_age}", LE(K(DQ, "chk_age"), max_age),
+          "Accounting-based scores describe the balance sheet at its date; stale statements miss recent deterioration.")
     price_age = _days_between(ds.market.price_date, ds.retrieved_at[:10])
     check("chk_price_age", "Days between the price date and data retrieval", price_age, "int", "<= 7", LE(K(DQ, "chk_price_age"), 7),
           "Market-based measures need a current price.")
-    check("chk_years", "Fiscal years of statements available", nh, "int", ">= 3", GE(K(DQ, "chk_years"), 3),
-          "Trends (Piotroski, Beneish, Ohlson change terms) need at least two years; three or more show a trajectory.")
+    check("chk_years", "Fiscal years of statements available" + (" (plus the LTM column)" if A.ltm else ""), A.n_annual, "int", ">= 3", GE(K(DQ, "chk_years"), 3),
+          "Trends (Piotroski, Beneish, Ohlson change terms) need at least two periods; three or more fiscal years show a trajectory.")
     min_obs = 100 if daily else 24
     check("chk_obs", "Return observations for equity volatility", mer("n_ret"), "int", f">= {min_obs}", GE(mer("n_ret"), min_obs),
           "Volatility from a short window (recent listing or re-listing) is unreliable and drives the Merton probabilities.")
@@ -1075,8 +1087,10 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     check("chk_ni", f"Net income reconciles to pre-tax income - tax ({labels[L]})", ni_gap, "num2", "<= 10% of |net income| + 0.5",
           LE(ni_gap, 0.10 * ABS(fin("net_income", L)) + 0.5), "Minority interest and discontinued operations explain small gaps; large ones suggest a mapping problem.")
     cash_gap = ABS(fin("begin_cash", L) + fin("net_change_cash", L) - fin("end_cash", L))
-    check("chk_cashroll", f"Cash roll-forward: beginning cash + net change = ending cash ({labels[L]})", cash_gap, "num2", "<= 0.5",
-          LE(cash_gap, 0.5), "A broken roll-forward means the cash-flow statement fields come from different bases.")
+    check("chk_cashroll", f"Cash roll-forward: beginning cash + net change = ending cash ({labels[L]})", cash_gap, "num2", "<= 0.5% of ending cash + 0.5",
+          LE(cash_gap, 0.005 * ABS(fin("end_cash", L)) + 0.5),
+          "A broken roll-forward means the cash-flow statement fields come from different bases; small gaps are FX effects and rounding"
+          + (" across the four summed quarters." if A.ltm else "."))
     check("chk_plausible", "Plausibility: total liabilities / total assets (also requires current ratio <= 50x)", rat("r_tl_ta", L), "pct", "0% - 300%",
           AND(GE(rat("r_tl_ta", L), 0), LE(rat("r_tl_ta", L), 3), LE(rat("r_current", L), 50)),
           "Ratios outside these bounds usually mean mis-scaled or mis-mapped statement items.")
@@ -1106,7 +1120,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
               IF(GT(K(DQ, "n_fail"), 0), "FAIL - integrity problem", IF(GT(K(DQ, "n_flag"), 0), "REVIEW - flags raised", "PASS - all checks clear")), "text", bold=True)
     dq.blank()
     # ---- model applicability (data facts, computed in Python) ----
-    src_L = ds.periods[L].source_fields
+    src_L = P[L].source_fields
     def reported(k: str) -> bool:
         v = src_L.get(k, "")
         return bool(v) and not v.startswith("derived")
@@ -1135,11 +1149,11 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
               "Pending: after writing, the FinTea service recalculates this workbook with LibreOffice Calc and compares every formula cell with its own engine.",
               "text", style="note")
     dq.blank()
-    dq.text(f"Source traceability ({labels[L]}, latest fiscal year)", "section")
+    dq.text(f"Source traceability ({labels[L]}, {A.basis_label})", "section")
     hdr(DQ, dq, ["Line item", "Source field", "Derived?"])
     for _, keys in FIN_GROUPS:
         for k in keys:
-            src = ds.periods[L].source_fields.get(k, "")
+            src = P[L].source_fields.get(k, "")
             book.set(DQ, dq.r, 1, FIELD_LABELS[k], "text", "label", indent=1)
             book.set(DQ, dq.r, 2, src or "not reported", "text", "note")
             book.set(DQ, dq.r, 3, "derived" if src.startswith("derived") else ("reported" if src else "missing"), "text", "note")
@@ -1147,7 +1161,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     dq.blank()
     dq.text("Data notes", "section")
     dq.text(f"Source: {ds.source}; retrieved {ds.retrieved_at.replace('T', ' ').replace('Z', ' UTC')}; price as of {ds.market.price_date}; "
-            f"{nh} fiscal years ({labels[0]} - {labels[L]}); sector: {ds.profile.sector or 'n/a'} / {ds.profile.industry or 'n/a'}.", "text", wrap=True, merge_to=5)
+            f"{A.describe()}; sector: {ds.profile.sector or 'n/a'} / {ds.profile.industry or 'n/a'}.", "text", wrap=True, merge_to=5)
+    dq.text("- " + A.note, "text", wrap=True, merge_to=5)
     for n_ in ds.notes:
         dq.text("- " + n_, "text", wrap=True, merge_to=5)
     dq.sh.col_widths = {1: 66, 2: 18, 3: 24, 4: 26, 5: 90}
@@ -1162,8 +1177,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
                      ("Sector / industry", f"{ds.profile.sector or 'n/a'} / {ds.profile.industry or 'n/a'}"),
                      ("Reporting currency", ccy), ("Units", f"{units} (shares in millions, per-share data in {ccy})"),
                      ("Data source", ds.source), ("Data retrieved", ds.retrieved_at.replace("T", " ").replace("Z", " UTC")),
-                     ("Share price as of", ds.market.price_date), ("Latest fiscal year end", dates[L]),
-                     ("Fiscal years analysed", f"{labels[0]} - {labels[L]}"), ("Report generated", generated)):
+                     ("Share price as of", ds.market.price_date), ("Analysis basis", f"{A.basis_label} ({labels[L]})"),
+                     ("Latest balance sheet", A.balance_date), ("Periods analysed", A.describe()), ("Report generated", generated)):
         cv.scalar(None, lab, val, "text", style="text")
     cv.blank()
     cv.text("Key outputs", "section")
@@ -1264,6 +1279,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         "company": name, "symbol": sym, "currency": ccy, "units": units, "sector": ds.profile.sector, "industry": ds.profile.industry,
         "exchange": ds.profile.exchange, "financial_sector": financial, "price": ds.market.price, "price_date": ds.market.price_date,
         "market_cap": num(INP, "market_cap"), "market_cap_usd_bn": num(INP, "market_cap_usd_bn"), "base_year": base_year, "labels": labels, "nh": nh,
+        "basis": A.basis, "ltm": A.ltm, "base_label": base_label, "balance_date": A.balance_date, "n_annual": A.n_annual,
+        "periods_note": A.describe(), "basis_note": A.note,
         "composite_score": num(DASH, "composite_score"), "composite_grade": txt(DASH, "composite_grade"),
         "pd_merton_naive": num(MER, "pd_naive"), "dd_naive": num(MER, "dd_naive"), "pd_merton_rn": num(MER, "pd_rn"), "pd_merton_phys": num(MER, "pd_phys"),
         "dd_rn": num(MER, "dd_rn"), "asset_value": num(MER, "V"), "asset_vol": num(MER, "sigma_V"), "equity_vol": num(MER, "sigma_E"), "mu": num(MER, "mu"),

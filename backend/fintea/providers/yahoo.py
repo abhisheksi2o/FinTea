@@ -19,8 +19,8 @@ import requests
 
 from collections import Counter
 
-from .base import (MINOR_UNITS, CompanyProfile, DataProvider, FinancialDataset, FiscalPeriod, MarketSnapshot,
-                   PriceSeries, ProviderError, SearchResult, align_monthly, index_for_symbol, now_iso)
+from .base import (FLOW_FIELDS, MINOR_UNITS, STOCK_FIELDS, CompanyProfile, DataProvider, FinancialDataset, FiscalPeriod,
+                   MarketSnapshot, PriceSeries, ProviderError, SearchResult, align_monthly, index_for_symbol, now_iso)
 
 BASE = "https://query2.finance.yahoo.com"
 # Yahoo rate-limits (HTTP 429) the long desktop-browser user agents; the short one is accepted.
@@ -80,6 +80,10 @@ FIELD_MAP: Dict[str, List[str]] = {
     "net_change_cash": ["ChangesInCash"],
     "free_cash_flow": ["FreeCashFlow"],
 }
+
+
+def _days(a: str, b: str) -> int:
+    return (datetime.strptime(b[:10], "%Y-%m-%d") - datetime.strptime(a[:10], "%Y-%m-%d")).days
 
 
 class YahooProvider(DataProvider):
@@ -258,6 +262,90 @@ class YahooProvider(DataProvider):
         stmt_ccy = currencies.most_common(1)[0][0] if currencies else ""
         return periods[-6:], stmt_ccy
 
+    def _ltm(self, symbol: str) -> tuple[Optional[FiscalPeriod], Dict[str, object]]:
+        """Latest twelve months from the quarterly statements: flows summed over the four most recent consecutive
+        quarters, balance sheet at the latest quarter end within one quarter of the LTM end. Returns (None, meta)
+        with the reason when the quarterly data cannot support it (semi-annual reporters, gaps, no balance sheet)."""
+        types = sorted({t for lst in FIELD_MAP.values() for t in lst})
+        now = int(time.time())
+        try:
+            js = self._get(f"/ws/fundamentals-timeseries/v1/finance/timeseries/{requests.utils.quote(symbol)}",
+                           {"type": ",".join("quarterly" + t for t in types), "period1": now - int(2.3 * 366 * 86400),
+                            "period2": now + 86400, "merge": "false"})
+        except ProviderError as e:
+            return None, {"available": False, "reason": f"quarterly statements not retrievable ({str(e)[:80]})"}
+        by_type: Dict[str, Dict[str, float]] = {}
+        for res in js.get("timeseries", {}).get("result") or []:
+            t = res["meta"]["type"][0]
+            vals = {}
+            for v in res.get(t) or []:
+                if v and v.get("reportedValue") and v["reportedValue"].get("raw") is not None:
+                    vals[v["asOfDate"]] = float(v["reportedValue"]["raw"])
+            by_type[t.replace("quarterly", "", 1)] = vals
+
+        def series(key: str) -> tuple[Dict[str, float], str]:
+            for c in FIELD_MAP[key]:
+                if by_type.get(c):
+                    return by_type[c], "quarterly" + c
+            return {}, ""
+
+        rev, _ = series("revenue")
+        dates = sorted(rev)
+        if len(dates) < 4:
+            return None, {"available": False, "reason": f"only {len(dates)} quarterly income statements available"}
+        # the four most recent quarter ends must be consecutive quarters (about 13 weeks apart)
+        q = dates[-4:]
+        gaps = [_days(q[i], q[i + 1]) for i in range(3)]
+        if not all(75 <= g <= 105 for g in gaps):
+            return None, {"available": False, "reason": f"the latest quarterly income statements are not four consecutive quarters ({', '.join(q)})"}
+        ta, _ = series("total_assets")
+        bs_dates = [d for d in sorted(ta) if d <= q[-1] and _days(d, q[-1]) <= 100]
+        if not bs_dates:
+            return None, {"available": False, "reason": "no quarterly balance sheet within a quarter of the latest income statement"}
+        bs_date = bs_dates[-1]
+        fields: Dict[str, Optional[float]] = {}
+        src: Dict[str, str] = {}
+        missing_flows: List[str] = []
+        for key in FLOW_FIELDS:
+            ser, name = series(key)
+            if ser and all(d in ser for d in q):
+                fields[key] = sum(ser[d] for d in q)
+                src[key] = f"LTM: sum of 4 quarters of {name}"
+            else:
+                fields[key] = None
+                if ser:
+                    missing_flows.append(key)
+        for key in STOCK_FIELDS:
+            ser, name = series(key)
+            if ser and bs_date in ser:
+                fields[key] = ser[bs_date]
+                src[key] = f"quarter end {bs_date}: {name}"
+            elif ser and q[-1] in ser:
+                fields[key] = ser[q[-1]]
+                src[key] = f"quarter end {q[-1]}: {name}"
+            else:
+                fields[key] = None
+        eps, name = series("diluted_eps")
+        fields["diluted_eps"] = sum(eps[d] for d in q) if eps and all(d in eps for d in q) else None
+        if fields["diluted_eps"] is not None:
+            src["diluted_eps"] = f"LTM: sum of 4 quarters of {name}"
+        end_cash, name = series("end_cash")
+        fields["end_cash"] = end_cash.get(q[-1]) if end_cash else None
+        if fields["end_cash"] is not None:
+            src["end_cash"] = f"quarter end {q[-1]}: {name}"
+        begin_cash: Optional[float] = None
+        if end_cash:
+            earlier = [d for d in sorted(end_cash) if d < q[0]]
+            if earlier and 75 <= _days(earlier[-1], q[0]) <= 105:
+                begin_cash = end_cash[earlier[-1]]
+                src["begin_cash"] = f"quarter end {earlier[-1]}: {name}"
+        fields["begin_cash"] = begin_cash
+        if fields.get("revenue") is None or fields.get("total_assets") is None:
+            return None, {"available": False, "reason": "quarterly revenue or total assets missing"}
+        meta = {"available": True, "quarters": q, "balance_date": bs_date, "missing_flows": missing_flows,
+                "label": f"LTM {q[-1][:7]}"}
+        return FiscalPeriod(period_end=q[-1], fields=fields, source_fields=src), meta
+
     def _fx_rate(self, from_ccy: str, to_ccy: str) -> Optional[float]:
         """Spot rate: 1 unit of from_ccy in to_ccy, via Yahoo FX quotes (tries both pair orders)."""
         if from_ccy == to_ccy:
@@ -292,9 +380,18 @@ class YahooProvider(DataProvider):
         index = self._cached(f"index:{idx_sym}", lambda: self._monthly_series(idx_sym, idx_name))
         stock, index = align_monthly(stock, index)
         daily = self._daily_series(symbol, name)
+        ltm, ltm_meta = self._ltm(symbol)
         rf, rf_src = self._cached("rf", self._risk_free)
         info = self._lookup(symbol)
         notes: List[str] = []
+        if ltm is not None and ltm.period_end <= periods[-1].period_end:
+            ltm_meta = {"available": False, "reason": f"the latest fiscal year ({periods[-1].period_end}) is already the most recent period"}
+            ltm = None
+        if ltm is None:
+            notes.append(f"Latest-twelve-months basis not available from quarterly data ({ltm_meta.get('reason', 'unknown')}); "
+                         "the default-risk analysis uses the latest fiscal year.")
+        elif ltm_meta.get("missing_flows"):
+            notes.append("LTM period: no quarterly data for " + ", ".join(ltm_meta["missing_flows"]) + " (treated as not reported).")
         if len(stock.closes) < 13:
             notes.append(f"Only {len(stock.closes)} months of price history are available (recent listing or re-listing): "
                          "beta and volatility estimates are unreliable.")
@@ -302,11 +399,14 @@ class YahooProvider(DataProvider):
             notes.append("Daily price history unavailable; equity volatility falls back to monthly returns.")
         last = periods[-1]
         stmt_ccy = stmt_ccy or ""
-        shares = last.get("shares_outstanding") or last.get("diluted_shares")
+        # market capitalisation uses the most recent share count: the latest quarter end when an LTM period exists
+        share_src = ltm if (ltm is not None and (ltm.get("shares_outstanding") or ltm.get("diluted_shares"))) else last
+        shares = share_src.get("shares_outstanding") or share_src.get("diluted_shares")
         if shares is None:
             raise ProviderError(f"Share count unavailable for {symbol}")
-        if last.get("shares_outstanding") is None:
-            notes.append("Shares outstanding proxied by diluted weighted-average shares of the latest fiscal year.")
+        if share_src.get("shares_outstanding") is None:
+            notes.append("Shares outstanding proxied by diluted weighted-average shares of the latest "
+                         + ("quarter." if share_src is ltm else "fiscal year."))
         price_ts = meta.get("regularMarketTime")
         price_date = datetime.fromtimestamp(price_ts, tz=timezone.utc).strftime("%Y-%m-%d") if price_ts else now_iso()[:10]
         # --- currency alignment: the model runs in the reporting currency of the statements ---
@@ -352,4 +452,4 @@ class YahooProvider(DataProvider):
             notes.append("Fields not reported by the source for the latest fiscal year (treated as zero): " + ", ".join(missing) + ".")
         return FinancialDataset(profile=profile, market=market, periods=periods, stock_prices=stock,
                                 index_prices=index, source="Yahoo Finance", retrieved_at=now_iso(), notes=notes,
-                                daily_prices=daily)
+                                daily_prices=daily, ltm=ltm, ltm_meta=ltm_meta)

@@ -28,6 +28,10 @@ CASHFLOW_FIELDS = [
     "net_change_cash", "free_cash_flow",
 ]
 ALL_FIELDS = INCOME_FIELDS + BALANCE_FIELDS + CASHFLOW_FIELDS
+# Flow items are summed over four quarters for a latest-twelve-months period; stock items are taken at the latest quarter end.
+FLOW_FIELDS = [k for k in INCOME_FIELDS if k not in ("diluted_shares", "basic_shares", "diluted_eps")] + \
+    [k for k in CASHFLOW_FIELDS if k not in ("begin_cash", "end_cash")]
+STOCK_FIELDS = BALANCE_FIELDS + ["diluted_shares", "basic_shares"]
 
 FIELD_LABELS = {
     "revenue": "Total revenue", "cogs": "Cost of revenue", "gross_profit": "Gross profit (reported)",
@@ -124,6 +128,8 @@ class FinancialDataset:
     retrieved_at: str
     notes: List[str] = field(default_factory=list)
     daily_prices: Optional[PriceSeries] = None   # ~1 year of daily adjusted closes (equity volatility); optional
+    ltm: Optional[FiscalPeriod] = None           # latest twelve months: flows summed over four quarters, latest quarter-end balance sheet
+    ltm_meta: Dict[str, Any] = field(default_factory=dict)   # quarters used, balance-sheet date, fields not available quarterly
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -138,6 +144,7 @@ class FinancialDataset:
             index_prices=PriceSeries(**d["index_prices"]),
             source=d["source"], retrieved_at=d["retrieved_at"], notes=list(d.get("notes", [])),
             daily_prices=PriceSeries(**d["daily_prices"]) if d.get("daily_prices") else None,
+            ltm=FiscalPeriod(**d["ltm"]) if d.get("ltm") else None, ltm_meta=dict(d.get("ltm_meta") or {}),
         )
 
 
