@@ -69,6 +69,8 @@ export interface RiskSummary {
   expected_loss: number | null; pd_cds: number | null; liquidity_coverage_12m: number | null;
   interest_estimated_coverage: number | null; rating_on_avg_ebit: string | null;
   stress: RiskStress | null; applicability: ModelApplicability[];
+  dupont?: { roe: number | null; roe_five_step: number | null; net_margin: number | null; asset_turnover: number | null; equity_multiplier: number | null;
+    tax_burden: number | null; interest_burden: number | null; ebit_margin: number | null; roa: number | null; leverage_effect: number | null; roe_change: number | null };
   asset_value: number | null; asset_vol: number | null; equity_vol: number | null; mu: number | null; default_point: number | null; merton_check?: number | null;
   altman_z: number | null; altman_zone: string | null; altman_z1: number | null; altman_z1_zone: string | null; altman_z2: number | null; altman_z2_zone: string | null;
   em_score: number | null; em_rating: string | null; piotroski: number | null; piotroski_class: string | null;

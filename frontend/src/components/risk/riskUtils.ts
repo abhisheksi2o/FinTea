@@ -187,7 +187,7 @@ export function subScoreSpec(s: RiskSummary): ChartSpec {
     id: "sub_scores", type: "bar", title: "Distress signal index: sub-score by signal", fmt: "num1", y_title: "0 = minimal ... 100 = severe", x_title: "",
     stacked: false, y_min: 0, y_max: 100, note: "Each signal is rescaled to 0-100 and weighted (weights on the Inputs tab). The index is an uncalibrated ranking device, not a probability of default.", anchor: "",
     categories: keys.map((k) => SUB_SCORE_SHORT[k] ?? k),
-    series: [{ name: "Sub-score", color: "2E75B6", values: keys.map((k) => { const v = (s.sub_scores as Record<string, unknown>)[k]; return isNum(v) ? v : null; }) }],
+    series: [{ name: "Sub-score", color: "2E75B6", values: keys.map((k) => { const v = (s.sub_scores as unknown as Record<string, unknown>)[k]; return isNum(v) ? v : null; }) }],
   };
 }
 

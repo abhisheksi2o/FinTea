@@ -19,7 +19,11 @@ $ ./run.sh            # full app with live data for any listed company; open htt
 
 The second product in the same app: type a company and get a **default-risk report** as a formula-driven,
 independently verified Excel workbook plus an interactive dashboard. Switch the mode selector next to the
-search bar to *Default risk analysis*.
+search bar to *Default risk analysis*. The web view leads with the market-implied and rating-implied
+probabilities of default, the Altman Z'' zone, model agreement and the leverage / coverage / liquidity trends,
+then the distress signal index, stress tests, per-model tables, DuPont analysis, editable inputs (rebuild in
+one click), a data-quality audit and every sheet of the workbook with its formulas. The search bar offers
+keyboard-navigable suggestions with exchange and sector, recent searches and example chips.
 
 | Sheet | Content |
 |---|---|
@@ -27,6 +31,7 @@ search bar to *Default risk analysis*.
 | Dashboard | Distress signal index with editable weights, probability of default by model with horizon and measure, model verdicts, key credit ratios and ten native Excel charts |
 | Inputs | Market inputs, model choices, every published coefficient and threshold with its source, Damodaran rating tables, S&P default-rate table - all blue cells the formulas reference |
 | Financials / Ratios | Reported statements with the Yahoo field per line; liquidity, leverage, coverage, profitability, cash-flow and market-based ratios by year |
+| DuPont | Three-step (net margin x asset turnover x equity multiplier) and five-step (tax burden x interest burden x EBIT margin x asset turnover x equity multiplier) ROE decomposition by year, with charts |
 | Altman Z | Z (1968), Z' (1983), Z'' (1995) with zones, the EM score and its bond-rating equivalent, an EBIT stress case |
 | Piotroski F, Beneish M | Nine fundamental-strength signals and eight earnings-manipulation indices, year by year |
 | Distress Models | Ohlson O (logit, Ohlson's 3.8% cut-off), Zmijewski X (probit), Springate, Grover, Taffler |

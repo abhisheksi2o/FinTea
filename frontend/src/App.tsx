@@ -1,23 +1,31 @@
-import { useEffect, useState } from "react";
-import { api, STATIC } from "./api";
+import { useCallback, useEffect, useState } from "react";
+import { api, REPO_URL, STATIC, STATIC_RISK_NOTICE } from "./api";
 import { exportWorkbook, loadIndex, type SiteIndex } from "./staticMode";
 import { AssumptionsPanel } from "./components/AssumptionsPanel";
 import { FeedbackPanel } from "./components/FeedbackPanel";
-import { SearchBar } from "./components/SearchBar";
+import { SearchBar, type AppMode } from "./components/SearchBar";
 import { SheetGrid } from "./components/SheetGrid";
 import { SummaryCards } from "./components/SummaryCards";
-import type { ModelResponse, Provider } from "./types";
+import { RiskView } from "./components/risk/RiskView";
+import type { ModelResponse, Provider, RiskResponse } from "./types";
 
-const STEPS = ["Resolving company", "Fetching financial statements and prices", "Deriving assumptions", "Building linked three-statement model, beta, WACC and DCF", "Writing Excel workbook", "Verifying every formula with LibreOffice"];
+const DCF_STEPS = ["Resolving company", "Fetching financial statements and prices", "Deriving assumptions", "Building linked three-statement model, beta, WACC and DCF", "Writing Excel workbook", "Verifying every formula with LibreOffice"];
+const RISK_STEPS = ["Resolving company", "Fetching statements, prices and rates", "Computing Altman, Ohlson, Zmijewski, Piotroski, Beneish, Springate, Grover and Taffler", "Solving the Merton model and the synthetic rating", "Writing the Excel report", "Verifying every formula with LibreOffice"];
+
+const MODE_KEY = "fintea.mode";
+const loadMode = (): AppMode => { try { return localStorage.getItem(MODE_KEY) === "risk" ? "risk" : "dcf"; } catch { return "dcf"; } };
 
 export default function App() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [provider, setProvider] = useState("yahoo");
   const [years, setYears] = useState(5);
+  const [mode, setModeState] = useState<AppMode>(loadMode);
   const [busy, setBusy] = useState(false);
+  const [busyMode, setBusyMode] = useState<AppMode>("dcf");
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelResponse | null>(null);
+  const [risk, setRisk] = useState<RiskResponse | null>(null);
   const [tab, setTab] = useState("Overview");
   const [index, setIndex] = useState<SiteIndex | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -25,26 +33,40 @@ export default function App() {
   const [idxFilter, setIdxFilter] = useState("All");
   const [gridQuery, setGridQuery] = useState("");
 
+  const setMode = useCallback((m: AppMode) => { setModeState(m); setError(null); try { localStorage.setItem(MODE_KEY, m); } catch { /* ignore */ } }, []);
+
   useEffect(() => {
     api.providers().then((r) => { setProviders(r.providers); setProvider(r.default); }).catch((e) => setError(String(e.message)));
     if (STATIC) loadIndex().then(setIndex).catch((e) => setError(String(e.message)));
   }, []);
 
+  const steps = busyMode === "risk" ? RISK_STEPS : DCF_STEPS;
   useEffect(() => {
     if (!busy) return;
     setStep(0);
-    const t = window.setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), 1300);
+    const t = window.setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 1300);
     return () => window.clearInterval(t);
-  }, [busy]);
+  }, [busy, steps.length]);
 
   const run = async (fn: () => Promise<ModelResponse>) => {
-    setBusy(true); setError(null);
+    setBusy(true); setBusyMode("dcf"); setError(null);
     try { const m = await fn(); setModel(m); setTab("Overview"); }
+    catch (e: any) { setError(e.message ?? String(e)); }
+    finally { setBusy(false); }
+  };
+  const runRisk = async (fn: () => Promise<RiskResponse>) => {
+    if (STATIC) { setError(null); return; }   // the notice panel below explains; nothing to fail
+    setBusy(true); setBusyMode("risk"); setError(null);
+    try { setRisk(await fn()); }
     catch (e: any) { setError(e.message ?? String(e)); }
     finally { setBusy(false); }
   };
   const build = (q: string) => run(() => api.build(q, provider, years));
   const rebuild = (overrides: Record<string, unknown>, yrs: number) => { if (model) run(() => api.rebuild(model, model.parent_id ?? model.id, overrides, yrs)); };
+  const analyse = (q: string) => runRisk(() => api.risk(q, provider));
+  const rebuildRisk = (overrides: Record<string, unknown>) => { if (risk) runRisk(() => api.riskRebuild(risk.id, overrides)); };
+  const submit = (q: string) => (mode === "risk" ? analyse(q) : build(q));
+
   const downloadEdited = async () => {
     if (!model) return;
     setExporting(true);
@@ -60,30 +82,42 @@ export default function App() {
   };
 
   const PANELS = ["Overview", "Checks & feedback", "Edit assumptions"];
-  const tabs = model ? [...PANELS, ...(model.sheets?.map((s) => s.name) ?? [])] : [];
-  const sheet = model?.sheets?.find((s) => s.name === tab);
+  const sheet = tab.startsWith("sheet:") ? model?.sheets?.find((s) => `sheet:${s.name}` === tab) : undefined;
+  const showDcf = mode === "dcf" && model && !busy;
+  const showRisk = mode === "risk" && risk && !busy;
 
   return (
-    <div className="app">
+    <div className={`app mode-${mode}`}>
       <header>
-        <div className="brand"><span className="logo">Fin</span>Tea <span className="tag">financial model builder</span></div>
-        <div className="brand-sub">Type a company. Get a fully linked three-statement DCF model in Excel - every number a formula, every assumption explained, every formula verified.</div>
+        <div className="brand"><span className="logo">Fin</span>Tea <span className="tag">financial models &amp; default risk analytics</span></div>
+        <div className="brand-sub">Type a company. Get a fully linked three-statement DCF model or a multi-model default risk report in Excel - every number a formula, every assumption explained, every formula verified.</div>
       </header>
       <main>
         {STATIC && (
           <div className="static-banner">
-            <b>Hosted on GitHub Pages.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href="https://github.com/abhisheksi2o/FinTea" target="_blank" rel="noreferrer">GitHub repository</a>.
+            <b>Hosted on GitHub Pages.</b> {index ? `${index.models.length.toLocaleString()} companies across ${index.countries.length} markets pre-built (refreshed nightly, last ${index.generated}).` : "Loading the model index..."} Pick one below or search. Every model is fully formula-linked; assumption edits are recalculated in your browser and the workbook is written on download. For live builds of any other listed company, run the app from the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a>.
           </div>
         )}
-        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onBuild={build} staticMode={STATIC} />
+        <SearchBar providers={providers} provider={provider} setProvider={setProvider} years={years} setYears={setYears} busy={busy} onSubmit={submit} staticMode={STATIC} mode={mode} setMode={setMode} />
+        {STATIC && mode === "risk" && (
+          <div className="notice risk-static">
+            <b>Default risk analysis runs in the full app.</b> {STATIC_RISK_NOTICE} Clone the <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub repository</a> and start it with <code>./run.sh</code> (or Docker) to analyse any listed company; the DCF models on this site keep working here.
+          </div>
+        )}
         {busy && (
-          <div className="progress">
+          <div className="progress" role="status" aria-live="polite">
             <div className="spinner" />
-            <ol>{STEPS.map((s, i) => <li key={s} className={i < step ? "done" : i === step ? "active" : ""}>{s}</li>)}</ol>
+            <div>
+              <div className="progress-title">{busyMode === "risk" ? "Analysing default risk" : "Building the financial model"}</div>
+              <ol>{steps.map((s, i) => <li key={s} className={i < step ? "done" : i === step ? "active" : ""}>{s}</li>)}</ol>
+            </div>
           </div>
         )}
-        {error && <div className="error">{error}</div>}
-        {model && !busy && (
+        {error && <div className="error" role="alert">{error}</div>}
+
+        {showRisk && risk && <RiskView r={risk} busy={busy} staticMode={STATIC} staticNotice={STATIC_RISK_NOTICE} onRebuild={rebuildRisk} />}
+
+        {showDcf && model && (
           <>
             <div className="model-head">
               <div>
@@ -102,8 +136,14 @@ export default function App() {
               </div>
             </div>
             <SummaryCards s={model.summary} />
-            <nav className="tabs">
-              {tabs.map((t, i) => <button key={t} className={(t === tab ? "active" : "") + (i === PANELS.length ? " first-sheet" : "")} onClick={() => setTab(t)}>{t}</button>)}
+            <nav className="tabs" aria-label="Model sections">
+              {PANELS.map((t) => <button key={`panel-${t}`} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
+              <span className="tabs-group-label" aria-hidden="true">Excel sheets</span>
+              {(model.sheets ?? []).map((sh) => (
+                <button key={`sheet-${sh.name}`} className={`sheet-tab${`sheet:${sh.name}` === tab ? " active" : ""}`} onClick={() => setTab(`sheet:${sh.name}`)} title={`${sh.name} sheet of the workbook`}>
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M1.5 6.5h13M1.5 10h13M6 2.5v11M10.5 2.5v11" stroke="currentColor" strokeWidth="1" /></svg>{sh.name}
+                </button>
+              ))}
             </nav>
             {tab === "Overview" && (
               <div className="overview">
@@ -123,6 +163,7 @@ export default function App() {
                       <li><b>Sensitivity</b> - live price grids over WACC × terminal growth and WACC × exit multiple.</li>
                       <li><b>Ratios</b> and <b>Feedback</b> - ratio analysis, formula-driven integrity checks, Altman Z, Piotroski F, and the qualitative assessment.</li>
                     </ul>
+                    <p className="muted">Want the credit view? Switch to <button className="linkish" onClick={() => setMode("risk")}>Default risk analysis</button> and run the same company.</p>
                   </div>
                   <div>
                     <h3>Qualitative summary</h3>
@@ -138,7 +179,8 @@ export default function App() {
             {sheet && <SheetGrid key={sheet.name} sheet={sheet} />}
           </>
         )}
-        {!model && !busy && STATIC && index && (() => {
+
+        {mode === "dcf" && !model && !busy && STATIC && index && (() => {
           const q = gridQuery.trim().toLowerCase();
           const list = index.models.filter((m) => (country === "All" || m.country === country) && (idxFilter === "All" || m.index.includes(idxFilter))
             && (!q || m.symbol.toLowerCase().includes(q) || m.name.toLowerCase().includes(q) || (m.sector ?? "").toLowerCase().includes(q)));
@@ -169,9 +211,10 @@ export default function App() {
             </div>
           );
         })()}
-        {!model && !busy && (
+
+        {mode === "dcf" && !model && !busy && (
           <div className="welcome">
-            <h3>How it works</h3>
+            <h3>How the financial model works</h3>
             <ol>
               <li>Search a listed company by name or ticker. Data comes from the selected source (Yahoo Finance is free; Bloomberg, FMP and Alpha Vantage plug in with credentials).</li>
               <li>FinTea normalises the statements, derives every assumption from the history (with a written basis), regresses beta, builds WACC, a three-statement forecast and a DCF.</li>
@@ -180,8 +223,33 @@ export default function App() {
             </ol>
           </div>
         )}
+        {mode === "risk" && !risk && !busy && (
+          <div className="welcome risk-welcome">
+            <div className="welcome-grid">
+              <div>
+                <h3>How the default risk analysis works</h3>
+                <ol>
+                  <li>Search a listed company. FinTea fetches the reported statements, the share price history, the risk-free rate and the market capitalisation.</li>
+                  <li>It computes the classic accounting models - Altman Z / Z' / Z'', Ohlson O, Zmijewski X, Springate, Grover, Taffler - plus Piotroski F and the Beneish M earnings-quality screen, each with the published coefficients and cut-offs.</li>
+                  <li>It solves the Merton structural model for a market-implied probability of default (naive distance to default and the iterated two-equation solve), maps interest coverage to a synthetic bond rating with its historical default rates, and runs simple stress scenarios.</li>
+                  <li>Everything is written to an Excel report as live formulas linked to the blue input cells, recalculated independently in LibreOffice and compared cell by cell. Edit inputs here and rebuild.</li>
+                </ol>
+              </div>
+              <div className="welcome-side">
+                <h4>What you get</h4>
+                <ul>
+                  <li>Probabilities of default from three independent families: market-implied (Merton), accounting (Ohlson, Zmijewski) and rating-implied (historical default rates).</li>
+                  <li>Model agreement: how many of the distress models flag the company, with each verdict.</li>
+                  <li>Trends of leverage, coverage and liquidity, and ten charts that also live in the Excel dashboard.</li>
+                  <li>A data-quality audit: 25 formula-driven checks, model applicability and the verification result.</li>
+                </ul>
+                <p className="muted small">Nothing here is investment advice or a credit rating; it is a mechanical screen from public data.</p>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
-      <footer>FinTea · models are generated from public data and mechanical assumptions; they are a starting point for analysis, not investment advice.</footer>
+      <footer>FinTea · models and risk analyses are generated from public data and mechanical assumptions; they are a starting point for analysis, not investment advice or a credit rating.</footer>
     </div>
   );
 }
