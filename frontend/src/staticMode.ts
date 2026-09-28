@@ -123,6 +123,7 @@ function refreshSummary(model: ModelResponse, eng: Engine) {
 const FORMATS: Record<string, string> = {
   num: '#,##0;(#,##0);"-"', num1: '#,##0.0;(#,##0.0);"-"', num2: '#,##0.00;(#,##0.00);"-"', pct: '0.0%;(0.0%);"-"', pct2: '0.00%;(0.00%);"-"',
   mult: '0.0"x";(0.0"x");"-"', price: "#,##0.00", int: "#,##0", days: "0.0", date: "dd-mmm-yyyy", text: "@", general: "General", factor: "0.0000", beta: "0.000",
+  pct4: '0.0000%;(0.0000%);"-"', score: "0.00;-0.00;0.00", score3: "0.000;-0.000;0.000",
 };
 const NAVY = "FF1F3864";
 function colLetter(c: number): string { let s = ""; while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
