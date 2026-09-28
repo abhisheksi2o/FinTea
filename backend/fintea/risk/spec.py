@@ -64,7 +64,9 @@ ALTMAN_Z1 = ModelSpec(
 ALTMAN_Z2 = ModelSpec(
     key="z2", name="Altman Z''-score (1995, non-manufacturers and emerging markets)",
     source="Altman, Hartzell & Peck (1995), 'Emerging Markets Corporate Bonds: A Scoring System', Salomon Brothers; Altman (2005), Emerging Markets Review 6.",
-    description="Z'' = 6.56 X1 + 3.26 X2 + 6.72 X3 + 1.05 X4 (no sales/assets term, so it is industry-neutral); EM score = Z'' + 3.25 maps to a US bond-rating equivalent.",
+    description="Z'' = 6.56 X1 + 3.26 X2 + 6.72 X3 + 1.05 X4 (no sales/assets term, so it is industry-neutral; Altman's recommended variant for non-manufacturers, "
+                "private firms and non-US companies). EM score = Z'' + 3.25; the bond-rating equivalent (BRE) table lists Altman's median EM scores of US bond "
+                "issuers by S&P rating (1995-96 sample) used here as class floors - an unadjusted statistical look-alike, not an agency rating.",
     coefs=(Coef("c_z2_x1", "Z'': X1 working capital / total assets", 6.56, "X1"),
            Coef("c_z2_x2", "Z'': X2 retained earnings / total assets", 3.26, "X2"),
            Coef("c_z2_x3", "Z'': X3 EBIT / total assets", 6.72, "X3"),
@@ -73,7 +75,8 @@ ALTMAN_Z2 = ModelSpec(
     thresholds=(Coef("t_z2_safe", "Z'' safe zone above", 2.60), Coef("t_z2_distress", "Z'' distress zone below", 1.10)),
 )
 
-# EM score -> US bond rating equivalent (lower bound of each band, descending). Altman (2005), Table 3.
+# EM score -> US bond rating equivalent: median EM scores by S&P class, 1995-96 US bond-issuer sample (Altman 2005, Table 2; Altman 2018 Figure 15),
+# applied as inclusive lower bounds (range convention). Later vintages (2006, 2013) drift by up to 0.6 points per class.
 EM_RATING_TABLE: List[Tuple[float, str]] = [
     (8.15, "AAA"), (7.60, "AA+"), (7.30, "AA"), (7.00, "AA-"), (6.85, "A+"), (6.65, "A"), (6.40, "A-"),
     (6.25, "BBB+"), (5.85, "BBB"), (5.65, "BBB-"), (5.25, "BB+"), (4.95, "BB"), (4.75, "BB-"), (4.50, "B+"),
@@ -86,10 +89,11 @@ EM_RATING_TABLE: List[Tuple[float, str]] = [
 PIOTROSKI = ModelSpec(
     key="f", name="Piotroski F-score (2000)",
     source="Piotroski, J. D. (2000), 'Value Investing: The Use of Historical Financial Statement Information to Separate Winners from Losers', Journal of Accounting Research 38.",
-    description="Nine binary signals (profitability, leverage/liquidity/source of funds, operating efficiency); 8-9 strong, 0-2 weak. "
-                "ROA and asset turnover use beginning-of-year total assets; leverage uses long-term debt over average total assets.",
+    description="Nine binary signals (profitability, leverage/liquidity/source of funds, operating efficiency); 8-9 strong, 0-1 weak. "
+                "ROA and asset turnover use beginning-of-year total assets; leverage uses total debt (long-term debt including the current portion) "
+                "over average total assets. Designed as a fundamental-strength screen for value stocks, not as a default predictor.",
     coefs=(),
-    thresholds=(Coef("t_f_strong", "F-score strong at or above", 8), Coef("t_f_weak", "F-score weak at or below", 2)),
+    thresholds=(Coef("t_f_strong", "F-score strong at or above", 8), Coef("t_f_weak", "F-score weak at or below (Piotroski 2000 uses 0-1; screeners often use 0-2)", 1)),
 )
 
 # ---------------------------------------------------------------------------
@@ -98,8 +102,10 @@ PIOTROSKI = ModelSpec(
 BENEISH = ModelSpec(
     key="m", name="Beneish M-score (1999) - earnings manipulation",
     source="Beneish, M. D. (1999), 'The Detection of Earnings Manipulation', Financial Analysts Journal 55(5); Beneish, Lee & Nichols (2013), FAJ 69(2).",
-    description="8-variable probit: M = -4.84 + 0.920 DSRI + 0.528 GMI + 0.404 AQI + 0.892 SGI + 0.115 DEPI - 0.172 SGAI + 4.679 TATA - 0.327 LVGI. "
-                "M > -1.78 flags a likely manipulator (about 3.8% implied probability); some practitioners use -2.22.",
+    description="8-variable unweighted probit: M = -4.84 + 0.920 DSRI + 0.528 GMI + 0.404 AQI + 0.892 SGI + 0.115 DEPI - 0.172 SGAI + 4.679 TATA - 0.327 LVGI. "
+                "M > -1.78 flags a likely manipulator (Beneish's 20:1 cost-ratio cut-off, 3.76% probability); -2.22 is a secondary-literature convention. "
+                "TATA uses the Beneish-Lee-Nichols (2013) cash-flow form (income - CFO) / total assets; DEPI uses total D&A as a proxy for depreciation. "
+                "The five-variable model is Beneish's earlier specification as reported in the secondary literature.",
     coefs=(Coef("c_m_const", "M: intercept", -4.84, "constant"),
            Coef("c_m_dsri", "M: DSRI days sales in receivables index", 0.920, "DSRI"),
            Coef("c_m_gmi", "M: GMI gross margin index", 0.528, "GMI"),
@@ -124,8 +130,9 @@ BENEISH = ModelSpec(
 OHLSON = ModelSpec(
     key="o", name="Ohlson O-score (1980) - one-year bankruptcy logit",
     source="Ohlson, J. A. (1980), 'Financial Ratios and the Probabilistic Prediction of Bankruptcy', Journal of Accounting Research 18(1), Model 1.",
-    description="O = -1.32 - 0.407 SIZE + 6.03 TLTA - 1.43 WCTA + 0.0757 CLCA - 1.72 OENEG - 2.37 NITA - 1.83 FUTL + 0.285 INTWO - 0.521 CHIN; "
-                "P(bankruptcy) = e^O / (1 + e^O). SIZE = ln(total assets / GNP price-level index, 1968 = 100).",
+    description="O = -1.32 - 0.407 SIZE + 6.03 TLTA - 1.43 WCTA + 0.0757 CLCA - 1.72 OENEG - 2.37 NITA - 1.83 FUTL + 0.285 INTWO - 0.521 CHIN (Model 1, one-year horizon); "
+                "P(bankruptcy) = e^O / (1 + e^O). SIZE = ln(total assets in US dollars / GNP price-level index of the prior year, 1968 = 100); "
+                "FUTL = funds from operations (net income + D&A) / total liabilities. Ohlson's error-minimising cut-off is a probability of 3.8% (O = -3.23).",
     coefs=(Coef("c_o_const", "O: intercept", -1.32, "constant"),
            Coef("c_o_size", "O: SIZE ln(total assets / GNP price index)", -0.407, "SIZE"),
            Coef("c_o_tlta", "O: TLTA total liabilities / total assets", 6.03, "TLTA"),
@@ -136,7 +143,7 @@ OHLSON = ModelSpec(
            Coef("c_o_futl", "O: FUTL funds from operations / total liabilities", -1.83, "FUTL"),
            Coef("c_o_intwo", "O: INTWO 1 if net loss in both of the last two years", 0.285, "INTWO"),
            Coef("c_o_chin", "O: CHIN change in net income scaled", -0.521, "CHIN")),
-    thresholds=(Coef("t_o_pd", "Ohlson distress flag when probability above", 0.5),),
+    thresholds=(Coef("t_o_pd", "Ohlson distress flag when probability above (0.038 = Ohlson's optimal cut-off; 0.5 = logistic midpoint)", 0.038),),
 )
 
 # ---------------------------------------------------------------------------
@@ -186,7 +193,8 @@ TAFFLER = ModelSpec(
     source="Taffler, R. J. (1983), 'The Assessment of Company Solvency and Performance Using a Statistical Model', Accounting and Business Research 13(52); Agarwal & Taffler (2007), Accounting and Business Research 37(4).",
     description="Z = 3.20 + 12.18 X1 + 2.50 X2 - 10.68 X3 + 0.029 X4; X1 = pre-tax profit / current liabilities, X2 = current assets / total liabilities, "
                 "X3 = current liabilities / total assets, X4 = no-credit interval = (quick assets - current liabilities) / daily operating costs, "
-                "daily operating costs = (sales - pre-tax profit - depreciation) / 365. Z < 0 signals the at-risk region.",
+                "quick assets = current assets - inventory, daily operating costs = (sales - pre-tax profit - depreciation) / 365. Z < 0 signals the at-risk region "
+                "(Agarwal & Taffler 2007). Estimated on UK listed industrials.",
     coefs=(Coef("c_t_const", "Taffler: constant", 3.20, "constant"),
            Coef("c_t_x1", "Taffler: X1 pre-tax profit / current liabilities", 12.18, "X1"),
            Coef("c_t_x2", "Taffler: X2 current assets / total liabilities", 2.50, "X2"),
@@ -277,7 +285,7 @@ class Signal:
 COMPOSITE_SIGNALS: Tuple[Signal, ...] = (
     Signal("w_z2", "Altman Z'' (zone-scaled)", 0.20, "0 at the safe cut-off (2.60) rising linearly to 100 at the distress cut-off (1.10)."),
     Signal("w_merton", "Merton naive probability of default", 0.20, "Log scale: 0 at PD <= 0.01%, 100 at PD >= 20%."),
-    Signal("w_ohlson", "Ohlson O-score", 0.15, "0 at O = -4 (about 1.8% probability) rising linearly to 100 at O = 0 (50% probability)."),
+    Signal("w_ohlson", "Ohlson O-score", 0.15, "0 at O = -6.5 (about 0.15% probability) rising linearly to 100 at O = 0 (50%); Ohlson's 3.8% cut-off (O = -3.23) scores 50."),
     Signal("w_rating", "Synthetic rating notch", 0.15, "AAA = 0 ... D = 100, linear across the rating scale."),
     Signal("w_zmijewski", "Zmijewski X-score", 0.10, "0 at X = -3 (about 0.1% probability) rising linearly to 100 at X = 0 (50%)."),
     Signal("w_piotroski", "Piotroski F-score (inverted)", 0.10, "100 x (9 - F) / 9."),

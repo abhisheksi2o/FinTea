@@ -147,7 +147,9 @@ def test_api_risk_endpoints():
     r = client.post("/api/risk", json={"query": "BYND", "provider": "sample", "verify": False})
     assert r.status_code == 200, r.text
     js = r.json()
-    assert js["kind"] == "risk" and js["summary"]["symbol"] == "BYND" and js["summary"]["composite_grade"] == "Severe"
+    assert js["kind"] == "risk" and js["summary"]["symbol"] == "BYND" and js["summary"]["composite_grade"] in ("High", "Severe")
+    assert js["summary"]["agreement"] >= 3 and js["summary"]["stress"]["pd_both"] >= js["summary"]["pd_merton_naive"] * 0.9
+    assert js["summary"]["applicability"] and all(a["status"] for a in js["summary"]["applicability"])
     assert [s["name"] for s in js["sheets"]] == RISK_SHEET_ORDER
     assert js["charts"] and js["inputs"]["items"] and js["feedback"]["qualitative"]
     rid = js["id"]

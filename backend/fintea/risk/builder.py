@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..model.builder import M, SB
 from ..providers.base import FIELD_LABELS, FinancialDataset
-from ..sheet import (ABS, AND, COUNT, EQ, EXP, GE, GT, IF, IFERROR, LE, LN, LT, MAX, MIN, NORMSDIST, OR, SQRT, STDEV,
+from ..sheet import (ABS, AND, COUNT, EQ, EXP, GE, GT, IF, IFERROR, LE, LN, LOG10, LT, MAX, MIN, NORMSDIST, OR, SQRT, STDEV,
                      Book, CellRef, Chart, ChartSeries, Expr, K, RangeRef)
 from ..sheet.expr import lift
 from . import spec as S
@@ -40,7 +40,19 @@ FIN_GROUPS = [
                        "total_assets", "payables", "short_term_debt", "current_liabilities", "long_term_debt",
                        "total_liabilities", "total_equity", "stockholders_equity", "retained_earnings", "total_debt"]),
     ("Cash flow statement", ["cfo", "capex", "cfi", "cff", "dividends", "buybacks", "stock_issued", "debt_issued", "debt_repaid",
-                             "net_change_cash", "free_cash_flow"]),
+                             "begin_cash", "net_change_cash", "end_cash", "free_cash_flow"]),
+]
+MODEL_INPUTS = [
+    ("Altman Z / Z' / Z''", ["current_assets", "current_liabilities", "retained_earnings", "operating_income", "total_liabilities", "total_equity", "revenue"], False, True),
+    ("Piotroski F", ["net_income", "cfo", "total_debt", "current_assets", "current_liabilities", "cogs", "revenue"], True, True),
+    ("Beneish M", ["receivables", "revenue", "cogs", "current_assets", "ppe", "da", "sga", "long_term_debt", "current_liabilities", "cfo"], True, True),
+    ("Ohlson O", ["total_liabilities", "current_assets", "current_liabilities", "net_income", "da"], True, True),
+    ("Zmijewski X", ["net_income", "total_liabilities", "current_assets", "current_liabilities"], False, True),
+    ("Springate S", ["current_assets", "current_liabilities", "operating_income", "pretax_income", "revenue"], False, True),
+    ("Grover G", ["current_assets", "current_liabilities", "operating_income", "net_income"], False, True),
+    ("Taffler Z", ["pretax_income", "current_liabilities", "current_assets", "total_liabilities", "inventory", "da", "revenue"], False, True),
+    ("Merton distance to default", ["short_term_debt", "long_term_debt"], False, False),
+    ("Synthetic rating (interest coverage)", ["operating_income", "interest_expense"], False, True),
 ]
 RATING_CLASSES = [("AAA", ["AAA"]), ("AA", ["AA+", "AA", "AA-"]), ("A", ["A+", "A", "A-"]), ("BBB", ["BBB+", "BBB", "BBB-"]),
                   ("BB", ["BB+", "BB", "BB-"]), ("B", ["B+", "B", "B-"]), ("CCC", ["CCC+", "CCC", "CCC-", "CC", "C"])]
@@ -273,7 +285,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rt.row("quick_assets", "Quick assets (cash, short-term investments and receivables)", lambda p: fin("cash_and_sti", p) + fin("receivables", p))
     rt.row("net_debt", "Net debt (total debt - cash & short-term investments)", lambda p: fin("total_debt", p) - fin("cash_and_sti", p))
     rt.row("fcf", "Free cash flow (CFO + capex)", lambda p: fin("cfo", p) + fin("capex", p))
-    rt.row("ffo", "Funds from operations (pre-tax income + D&A)", lambda p: fin("pretax_income", p) + fin("da", p))
+    rt.row("ffo", "Funds from operations (net income + D&A, Ohlson's APB 19 measure)", lambda p: fin("net_income", p) + fin("da", p))
     rt.row("ebitda_calc", "EBITDA (EBIT + D&A)", lambda p: fin("operating_income", p) + fin("da", p))
     rt.section("Liquidity")
     Rw("r_current", "Current ratio (x)", lambda p: fin("current_assets", p) / fin("current_liabilities", p), "mult")
@@ -305,6 +317,9 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rt.row("r_debt_cfo", "Years to repay total debt from cash from operations",
            lambda p: IF(GT(fin("cfo", p), 0), safe(fin("total_debt", p) / fin("cfo", p)), "n/a"), "num1")
     Rw("r_cfo_tl", "Cash from operations / total liabilities", lambda p: fin("cfo", p) / fin("total_liabilities", p), "pct")
+    rt.row("r_liq12", "12-month liquidity coverage: (cash & short-term investments + CFO) / (short-term debt + interest expense)",
+           lambda p: IF(GT(fin("short_term_debt", p) + fin("interest_expense", p), 0),
+                        (fin("cash_and_sti", p) + fin("cfo", p)) / (fin("short_term_debt", p) + fin("interest_expense", p)), "n/a"), "mult")
     rt.section("Profitability")
     Rw("r_roa", "Return on assets (net income / total assets)", lambda p: fin("net_income", p) / fin("total_assets", p), "pct")
     rt.row("r_roe", "Return on equity (n/a when book equity is not positive)",
@@ -359,7 +374,13 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
            lambda p: IF(GT(alt("z2", p), inp("t_z2_safe")), "Safe", IF(LT(alt("z2", p), inp("t_z2_distress")), "Distress", "Grey")), "text")
     at.row("em", "EM score = Z'' + 3.25", lambda p: alt("z2", p) + inp("c_z2_const"), "score")
     n_em = len(S.EM_RATING_TABLE)
-    at.row("em_rating", "Bond rating equivalent of the EM score", lambda p: lookup_desc(alt("em", p), n_em, lambda i: f"em_lb_{i}", lambda i: f"em_r_{i}"), "text", bold=True)
+    at.row("em_rating", "Bond rating equivalent of the EM score (Altman 1996 medians as class floors)", lambda p: lookup_desc(alt("em", p), n_em, lambda i: f"em_lb_{i}", lambda i: f"em_r_{i}"), "text", bold=True)
+    at.section(f"Stress test ({labels[L]}): EBIT shocked by the factor on Inputs")
+    at.row("z2_stress", "Altman Z'' with stressed EBIT",
+           lambda p: inp("c_z2_x1") * alt("x1", p) + inp("c_z2_x2") * alt("x2", p) + inp("c_z2_x3") * alt("x3", p) * (1 + inp("stress_ebit")) + inp("c_z2_x4") * alt("x4b", p),
+           "score", periods=[L], bold=True)
+    at.row("z2_stress_zone", "Zone under stress",
+           lambda p: IF(GT(alt("z2_stress", p), inp("t_z2_safe")), "Safe", IF(LT(alt("z2_stress", p), inp("t_z2_distress")), "Distress", "Grey")), "text", periods=[L])
     at.blank()
     at.text("Z was estimated on US manufacturers; Z'' removes the sales/assets term and is the variant Altman recommends for non-manufacturers and non-US companies. "
             "Negative retained earnings or negative equity push X2 and X4 below zero, which is intended: accumulated losses are a distress signal.", "note")
@@ -378,8 +399,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     pt.section("Underlying measures")
     pt.row("roa", "ROA = net income / beginning total assets", lambda p: safe(fin("net_income", p) / ta_begin(p)), "pct")
     pt.row("cfo_ta", "Cash from operations / beginning total assets", lambda p: safe(fin("cfo", p) / ta_begin(p)), "pct")
-    pt.row("lever", "Leverage = long-term debt / average total assets",
-           lambda p: safe(fin("long_term_debt", p) / ((fin("total_assets", p) + fin("total_assets", p - 1)) / 2)) if p >= 1 else safe(fin("long_term_debt", p) / fin("total_assets", p)), "pct")
+    pt.row("lever", "Leverage = total debt (long-term debt incl. current portion) / average total assets",
+           lambda p: safe(fin("total_debt", p) / ((fin("total_assets", p) + fin("total_assets", p - 1)) / 2)) if p >= 1 else safe(fin("total_debt", p) / fin("total_assets", p)), "pct")
     pt.row("cr", "Current ratio (x)", lambda p: safe(fin("current_assets", p) / fin("current_liabilities", p)), "mult")
     pt.row("gm", "Gross margin", lambda p: safe((fin("revenue", p) - fin("cogs", p)) / fin("revenue", p)), "pct")
     pt.row("ato", "Asset turnover = revenue / beginning total assets (x)", lambda p: safe(fin("revenue", p) / ta_begin(p)), "mult")
@@ -391,7 +412,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         ("f2", "2. Positive cash from operations", lambda p: GT(fin("cfo", p), 0)),
         ("f3", "3. Return on assets improved", lambda p: GT(pio("roa", p), pio("roa", p - 1))),
         ("f4", "4. Cash from operations exceeds net income (accrual quality)", lambda p: GT(pio("cfo_ta", p), pio("roa", p))),
-        ("f5", "5. Leverage (long-term debt / average assets) decreased", lambda p: LT(pio("lever", p), pio("lever", p - 1))),
+        ("f5", "5. Leverage (total debt / average assets) decreased", lambda p: LT(pio("lever", p), pio("lever", p - 1))),
         ("f6", "6. Current ratio improved", lambda p: GT(pio("cr", p), pio("cr", p - 1))),
         ("f7", "7. No new equity issued", lambda p: EQ(pio("issued", p), 0)),
         ("f8", "8. Gross margin improved", lambda p: GT(pio("gm", p), pio("gm", p - 1))),
@@ -471,7 +492,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
            "score", bold=True)
     dt.row("o_pd", "Probability of bankruptcy = e^O / (1 + e^O)",
            lambda p: IF(GT(dis("o_score", p), 30), 1, IF(LT(dis("o_score", p), -30), 0, EXP(dis("o_score", p)) / (1 + EXP(dis("o_score", p))))) if p >= 1 else None, "pct2", bold=True)
-    dt.row("o_flag", "Classification (probability > 50%)", lambda p: IF(GT(dis("o_pd", p), inp("t_o_pd")), "Distress", "Not distressed") if p >= 1 else None, "text")
+    dt.row("o_flag", "Classification (probability above the cut-off on Inputs; Ohlson's optimal 3.8%)", lambda p: IF(GT(dis("o_pd", p), inp("t_o_pd")), "Distress", "Not distressed") if p >= 1 else None, "text")
     dt.section("Zmijewski X-score (1984)")
     dt.row("x_roa", "ROA = net income / total assets", lambda p: safe(fin("net_income", p) / fin("total_assets", p)), "factor")
     dt.row("x_finl", "FINL = total liabilities / total assets", lambda p: safe(fin("total_liabilities", p) / fin("total_assets", p)), "factor")
@@ -497,8 +518,8 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     dt.row("t_x1", "X1 = pre-tax profit / current liabilities", lambda p: safe(fin("pretax_income", p) / fin("current_liabilities", p)), "factor")
     dt.row("t_x2", "X2 = current assets / total liabilities", lambda p: safe(fin("current_assets", p) / fin("total_liabilities", p)), "factor")
     dt.row("t_x3", "X3 = current liabilities / total assets", lambda p: safe(fin("current_liabilities", p) / fin("total_assets", p)), "factor")
-    dt.row("t_x4", "X4 = no-credit interval (days) = (quick assets - current liabilities) / daily operating costs",
-           lambda p: safe((rat("quick_assets", p) - fin("current_liabilities", p)) / ((fin("revenue", p) - fin("pretax_income", p) - fin("da", p)) / 365)), "num1")
+    dt.row("t_x4", "X4 = no-credit interval (days) = (current assets - inventory - current liabilities) / daily operating costs",
+           lambda p: safe((fin("current_assets", p) - fin("inventory", p) - fin("current_liabilities", p)) / ((fin("revenue", p) - fin("pretax_income", p) - fin("da", p)) / 365)), "num1")
     dt.row("t_score", "Taffler Z-score", lambda p: inp("c_t_const") + inp("c_t_x1") * dis("t_x1", p) + inp("c_t_x2") * dis("t_x2", p) + inp("c_t_x3") * dis("t_x3", p) + inp("c_t_x4") * dis("t_x4", p), "score", bold=True)
     dt.row("t_flag", "Classification (Z < 0 = at risk)", lambda p: IF(LT(dis("t_score", p), inp("t_t_cut")), "At risk", "Solvent"), "text")
     dt.sh.col_widths = {1: 66, 2: 10}
@@ -510,7 +531,7 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     daily = ds.daily_prices is not None and len(ds.daily_prices.closes) >= 30
     px = ds.daily_prices if daily else ds.stock_prices
     n_px = len(px.closes)
-    data_r0 = 48
+    data_r0 = 70   # the price table starts here; the scalar block above must stay shorter (asserted below)
     ret_rng = RangeRef(MER, data_r0 + 1, 3, data_r0 + n_px - 1, 3)
     mt.title("Merton structural model and distance to default",
              f"{name} - naive DD (Bharath & Shumway 2008) and the iterated two-equation Merton solve; {n_px} {'daily' if daily else 'monthly'} prices")
@@ -549,6 +570,9 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
        (LN((mer("E") + mer("F_eff")) / mer("F_eff")) + (mer("mu") - 0.5 * mer("sigma_V_naive") ** 2) * mer("T")) / (mer("sigma_V_naive") * SQRT(mer("T"))),
        "score", basis="[ln((E+F)/F) + (mu - sigma_V^2/2) T] / (sigma_V sqrt(T))", bold=True)
     sc("pd_naive", "Naive probability of default = N(-DD)", NORMSDIST(-mer("dd_naive")), "pct2", bold=True)
+    sc("dd_naive_rf", "Naive distance to default with mu = risk-free rate (momentum removed)",
+       (LN((mer("E") + mer("F_eff")) / mer("F_eff")) + (mer("r") - 0.5 * mer("sigma_V_naive") ** 2) * mer("T")) / (mer("sigma_V_naive") * SQRT(mer("T"))), "score")
+    sc("pd_naive_rf", "Naive probability of default with mu = risk-free rate", NORMSDIST(-mer("dd_naive_rf")), "pct2")
     mt.text("Iterated Merton model (asset value and volatility solved in Python; formulas below re-derive equity value and volatility as a check)", "section")
     E_val = R.values["price"] * R.values["shares_outstanding"]
     fl = ds.periods[L].fields
@@ -579,10 +603,25 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     sc("dd_phys", "Distance to default with the expected asset return mu", (LN(mer("V") / mer("F_eff")) + (mer("mu") - 0.5 * mer("sigma_V") ** 2) * mer("T")) / (mer("sigma_V") * SQRT(mer("T"))), "score")
     sc("pd_phys", "Probability of default with mu = N(-DD)", NORMSDIST(-mer("dd_phys")), "pct2", bold=True)
     sc("solver_note", "Solver diagnostics", solver_text, "text", style="note")
+
+    def naive_pd_expr(E_x: Expr, sig_x: Expr) -> Expr:
+        sD = inp("c_dd_sd_a") + inp("c_dd_sd_b") * sig_x
+        sV = E_x / (E_x + mer("F_eff")) * sig_x + mer("F_eff") / (E_x + mer("F_eff")) * sD
+        dd = (LN((E_x + mer("F_eff")) / mer("F_eff")) + (mer("mu") - 0.5 * sV ** 2) * mer("T")) / (sV * SQRT(mer("T")))
+        return NORMSDIST(-dd)
+
+    mt.text("Stress test of the naive probability of default (shocks on Inputs; same expected return)", "section")
+    sc("stress_E", f"Stressed market equity ({units})", mer("E") * (1 + inp("stress_equity")), "num")
+    sc("stress_sigma", "Stressed equity volatility", mer("sigma_E") * (1 + inp("stress_vol")), "pct")
+    sc("pd_stress_equity", "Naive PD after the equity shock", naive_pd_expr(mer("stress_E"), mer("sigma_E")), "pct2")
+    sc("pd_stress_vol", "Naive PD after the volatility shock", naive_pd_expr(mer("E"), mer("stress_sigma")), "pct2")
+    sc("pd_stress_both", "Naive PD after both shocks", naive_pd_expr(mer("stress_E"), mer("stress_sigma")), "pct2", bold=True)
+    sc("expected_loss", "Expected loss rate = naive PD x (1 - recovery rate)", mer("pd_naive") * (1 - inp("recovery_rate")), "pct2")
     mt.blank()
     mt.text("Risk-neutral probabilities (drift = risk-free rate) are what bond and CDS prices embed and overstate real-world default frequencies; "
             "the naive DD with the prior-year equity return is the Bharath-Shumway forecast that performed as well as the full KMV iteration. "
             "Neither is a rating-agency default rate: treat them as market-implied signals.", "note")
+    assert mt.r < data_r0 - 2, f"Merton scalar block ({mt.r} rows) overlaps the price table at row {data_r0}"
     # price table
     book.set(MER, data_r0 - 2, 1, f"Price data ({'daily' if daily else 'monthly'} adjusted close, {px.dates[0]} to {px.dates[-1]})", "text", "section")
     for c, t in enumerate(["Date", f"{sym} adjusted close", "Log return"], start=1):
@@ -620,9 +659,30 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     rc("rating_small", "Coverage-based rating - small-firm table", lookup_desc(rtg("coverage"), ns, lambda i: f"rt_s_lb_{i}", lambda i: f"rt_s_r_{i}"), "text")
     rc("rating_cov", "Coverage-based rating (table selected by size)", IF(EQ(rtg("is_large"), 1), rtg("rating_large"), rtg("rating_small")), "text")
     rc("rating_em", "Altman EM-score rating equivalent", alt("em_rating", L), "text")
-    rc("rating", "Synthetic rating used", IF(EQ(rtg("has_interest"), 1), rtg("rating_cov"), rtg("rating_em")), "text", bold=True,
-       basis="Coverage-based when interest expense is reported, otherwise the EM-score rating")
-    rc("rating_source", "Basis of the rating", IF(EQ(rtg("has_interest"), 1), "Interest coverage (Damodaran table)", "Altman EM score (interest expense not reported)"), "text")
+    bbb_idx = S.RATING_ORDER.index("BBB")
+    avg_debt = (fin("total_debt", L) + fin("total_debt", L - 1)) / 2 if has_prior else fin("total_debt", L)
+    rc("interest_est", f"Estimated interest expense = average total debt x (risk-free + BBB spread) ({units})", avg_debt * (inp("risk_free") + K(INP, f"sp_s_{bbb_idx}")), "num",
+       basis="Used only when the source does not report interest expense and the fallback on Inputs is set to 2")
+    rc("coverage_est", "Interest coverage on estimated interest", IF(GT(rtg("interest_est"), 0), rtg("ebit") / rtg("interest_est"), 0), "mult")
+    rc("rating_est", "Coverage-based rating on estimated interest (table per size)",
+       IF(EQ(rtg("is_large"), 1), lookup_desc(rtg("coverage_est"), nl, lambda i: f"rt_l_lb_{i}", lambda i: f"rt_l_r_{i}"),
+          lookup_desc(rtg("coverage_est"), ns, lambda i: f"rt_s_lb_{i}", lambda i: f"rt_s_r_{i}")), "text")
+    n_avg = min(3, nh)
+    ebit_avg: Expr = fin("operating_income", L)
+    for q in range(1, n_avg):
+        ebit_avg = ebit_avg + fin("operating_income", L - q)
+    ebit_avg = ebit_avg / n_avg
+    rc("coverage_avg3", f"Interest coverage on average EBIT of the last {n_avg} fiscal year(s) (Damodaran's advice for atypical years)",
+       IF(EQ(rtg("has_interest"), 1), ebit_avg / rtg("interest"), 0), "mult")
+    rc("rating_avg3", "Rating on average EBIT (information only)",
+       IF(EQ(rtg("is_large"), 1), lookup_desc(rtg("coverage_avg3"), nl, lambda i: f"rt_l_lb_{i}", lambda i: f"rt_l_r_{i}"),
+          lookup_desc(rtg("coverage_avg3"), ns, lambda i: f"rt_s_lb_{i}", lambda i: f"rt_s_r_{i}")), "text")
+    rc("rating", "Synthetic rating used",
+       IF(EQ(rtg("has_interest"), 1), rtg("rating_cov"), IF(EQ(inp("interest_fallback"), 2), rtg("rating_est"), rtg("rating_em"))), "text", bold=True,
+       basis="Coverage-based when interest expense is reported; otherwise the fallback chosen on Inputs")
+    rc("rating_source", "Basis of the rating",
+       IF(EQ(rtg("has_interest"), 1), "Interest coverage (Damodaran table)",
+          IF(EQ(inp("interest_fallback"), 2), "Coverage on estimated interest (debt x (risk-free + BBB spread))", "Altman EM score (interest expense not reported)")), "text")
     n_sp = len(S.RATING_ORDER)
     rc("spread", "Default spread over the risk-free rate", lookup_eq(rtg("rating"), n_sp, lambda i: f"sp_r_{i}", lambda i: f"sp_s_{i}", S.SPREAD_BY_RATING["D"]), "pct2")
     rc("kd", "Rating-implied pre-tax cost of debt = risk-free + spread", inp("risk_free") + rtg("spread"), "pct2", bold=True)
@@ -646,6 +706,11 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     for i in reversed(range(len(S.RATING_ORDER))):
         notch = IF(EQ(rtg("rating"), S.RATING_ORDER[i]), i, notch)
     rc("rating_notch", f"Rating notch (0 = AAA ... {len(S.RATING_ORDER) - 1} = D)", notch, "int")
+    rs.text("Market-quoted credit (optional inputs)", "section")
+    rc("cds_spread", "CDS or bond spread entered on Inputs (0 = none)", inp("cds_spread"), "pct2")
+    rc("recovery", "Assumed recovery rate", inp("recovery_rate"), "pct")
+    rc("pd_cds", "Spread-implied annual default probability = spread / (1 - recovery)",
+       IF(GT(rtg("cds_spread"), 0), rtg("cds_spread") / (1 - rtg("recovery")), "n/a"), "pct2", bold=True)
     rs.blank()
     rs.text("A synthetic rating is an estimate from one ratio; agencies also weigh business risk, scale, cash flow stability and management. "
             "Default rates are long-run global averages for the letter class, not company-specific probabilities.", "note")
@@ -656,28 +721,30 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     # =====================================================================
     db = SB(book, DASH, [], labels, dates, nh)
     db.title("Default risk dashboard", f"{name} ({sym}) - composite score, probabilities of default, model verdicts and charts; {units}")
-    db.text("Composite default risk score (0 = minimal ... 100 = severe)", "section")
+    db.text("Distress signal index (0 = minimal ... 100 = severe) - an uncalibrated weighted average of model signals, not a probability of default", "section")
     hdr(DASH, db, ["Signal", "Latest value", "Sub-score (0-100)", "Weight", "Weighted contribution"])
     comp_r0 = db.r
     ln_lo, ln_hi = 0.0001, 0.20
+    acct = not financial   # accounting-ratio models and the coverage rating are not meaningful for financial institutions
     sig_defs = [
         ("sig_z2", "Altman Z'' (zone-scaled)", alt("z2", L), "score",
-         100 * MAX(0, MIN(1, (inp("t_z2_safe") - alt("z2", L)) / (inp("t_z2_safe") - inp("t_z2_distress")))), "w_z2", True),
+         100 * MAX(0, MIN(1, (inp("t_z2_safe") - alt("z2", L)) / (inp("t_z2_safe") - inp("t_z2_distress")))), "w_z2", acct),
         ("sig_merton", "Merton naive probability of default", mer("pd_naive"), "pct2",
          100 * MAX(0, MIN(1, (LN(MAX(mer("pd_naive"), 0.000001)) - LN(ln_lo)) / (LN(ln_hi) - LN(ln_lo)))), "w_merton", True),
         ("sig_ohlson", "Ohlson O-score", prior(DIST, "o_score", L), "score",
-         100 * MAX(0, MIN(1, (dis("o_score", L) + 4) / 4)) if has_prior else lift(0), "w_ohlson", has_prior),
-        ("sig_rating", "Synthetic rating", rtg("rating"), "text", rtg("rating_notch") / (len(S.RATING_ORDER) - 1) * 100, "w_rating", True),
-        ("sig_zmij", "Zmijewski X-score", dis("x_score", L), "score", 100 * MAX(0, MIN(1, (dis("x_score", L) + 3) / 3)), "w_zmijewski", True),
+         100 * MAX(0, MIN(1, (dis("o_score", L) + 6.5) / 6.5)) if has_prior else lift(0), "w_ohlson", has_prior and acct),
+        ("sig_rating", "Synthetic rating", rtg("rating"), "text", rtg("rating_notch") / (len(S.RATING_ORDER) - 1) * 100, "w_rating", acct),
+        ("sig_zmij", "Zmijewski X-score", dis("x_score", L), "score", 100 * MAX(0, MIN(1, (dis("x_score", L) + 3) / 3)), "w_zmijewski", acct),
         ("sig_pio", "Piotroski F-score (inverted)", prior(PIO, "f_score", L), "int",
-         100 * (9 - pio("f_score", L)) / 9 if has_prior else lift(0), "w_piotroski", has_prior),
+         100 * (9 - pio("f_score", L)) / 9 if has_prior else lift(0), "w_piotroski", has_prior and acct),
         ("sig_cons", "Springate / Grover / Taffler distress flags (0-3)",
          IF(EQ(dis("s_flag", L), "Likely failure"), 1, 0) + IF(EQ(dis("g_flag", L), "Bankrupt zone"), 1, 0) + IF(EQ(dis("t_flag", L), "At risk"), 1, 0), "int",
-         None, "w_consensus", True),
+         None, "w_consensus", acct),
     ]
     for key, label, value, fmt, sub, wkey, available in sig_defs:
         r = db.r
-        book.set(DASH, r, 1, label + ("" if available else " - not available with a single fiscal year"), "text", "label", indent=1)
+        why_na = "" if available else (" - not applicable to a financial institution" if not acct else " - not available with a single fiscal year")
+        book.set(DASH, r, 1, label + why_na, "text", "label", indent=1)
         book.set(DASH, r, 2, value, fmt, "link" if isinstance(value, K) else "formula", key=f"{key}_value")
         if sub is None:
             sub = dsh(f"{key}_value") / 3 * 100
@@ -692,14 +759,27 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         contrib_sum = contrib_sum + dsh(f"{key}_contrib")
         w_used = w_used + dsh(f"{key}_w")
     r = db.r
-    book.set(DASH, r, 1, "Composite default risk score (weighted average of the sub-scores)", "text", "total", bold=True)
+    book.set(DASH, r, 1, "Distress signal index (weighted average of the sub-scores)", "text", "total", bold=True)
     book.set(DASH, r, 3, safe(contrib_sum / dsh("composite_w")), "num1", "total", key="composite_score", bold=True)
     book.set(DASH, r, 4, w_used, "pct", "formula", key="composite_w")
     db.r += 1
     grade: Expr = lift(S.GRADES[-1][1])
     for lo, g in reversed(S.GRADES[:-1]):
         grade = IF(GE(dsh("composite_score"), lo), g, grade)
-    db.scalar("composite_grade", "Risk grade (Minimal < 20, Low < 40, Moderate < 60, High < 80, Severe)", grade, "text", bold=True, col=3)
+    db.scalar("composite_grade", "Index band (Minimal < 20, Low < 40, Moderate < 60, High < 80, Severe)", grade, "text", bold=True, col=3)
+    avail = [key for key, *rest in sig_defs if rest[-1]]
+    eq_sum: Expr = dsh(f"{avail[0]}_sub")
+    for key in avail[1:]:
+        eq_sum = eq_sum + dsh(f"{key}_sub")
+    db.scalar("composite_equal", f"Equal-weight alternative (mean of the {len(avail)} available sub-scores)", eq_sum / len(avail), "num1", col=3)
+    votes: Expr = IF(EQ(alt("z2_zone", L), "Distress"), 1, 0) + IF(EQ(dis("x_flag", L), "Distress"), 1, 0) + IF(EQ(dis("s_flag", L), "Likely failure"), 1, 0) \
+        + IF(EQ(dis("g_flag", L), "Bankrupt zone"), 1, 0) + IF(EQ(dis("t_flag", L), "At risk"), 1, 0) + IF(LT(mer("dd_naive"), 1.5), 1, 0)
+    n_vote_models = 6
+    if has_prior:
+        votes = votes + IF(EQ(dis("o_flag", L), "Distress"), 1, 0)
+        n_vote_models = 7
+    db.scalar("agreement", f"Model agreement: number of the {n_vote_models} distress models signalling distress", votes, "int", bold=True, col=3)
+    db.scalar("agreement_n", "Distress models counted", n_vote_models, "int", col=3, style="input")
     db.blank()
     db.text("Probability of default by model", "section")
     hdr(DASH, db, ["Model", "Probability", "Horizon", "Nature of the estimate"])
@@ -713,6 +793,9 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         ("pdt_r1", "Synthetic rating - historical default rate", rtg("pd_1y"), "1 year", "Long-run average default rate of the rating class"),
         ("pdt_r5", "Synthetic rating - historical default rate", rtg("pd_5y"), "5 years", "Cumulative average default rate of the rating class"),
     ]
+    pd_rows.insert(1, ("pdt_naive_rf", "Merton naive DD, risk-free drift", mer("pd_naive_rf"), "1 year", "Market-implied without the trailing-return momentum term"))
+    if float(R.values.get("cds_spread", 0) or 0) > 0:
+        pd_rows.append(("pdt_cds", "CDS / bond spread implied", rtg("pd_cds"), "1 year", "Market quote entered on Inputs: spread / (1 - recovery)"))
     for key, label, val, hz, note in pd_rows:
         r = db.r
         book.set(DASH, r, 1, label, "text", "label", indent=1)
@@ -902,6 +985,32 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
           "Negative equity makes ROE and debt/equity meaningless and pushes Z' and Z'' down; it is itself a distress signal.")
     check("chk_financial", "Financial-sector company (1 = yes)", 1 if financial else 0, "int", "= 0", EQ(K(DQ, "chk_financial"), 0),
           "Altman, Ohlson, Zmijewski and the other accounting models were estimated on non-financial firms; for banks and insurers use regulatory capital ratios instead.")
+    gp_gap = ABS(fin("gross_profit", L) - (fin("revenue", L) - fin("cogs", L)))
+    check("chk_gross", f"Gross profit reconciles to revenue - cost of revenue ({labels[L]})", gp_gap, "num2", "<= 0.5% of revenue + 0.5",
+          LE(gp_gap, 0.005 * ABS(fin("revenue", L)) + 0.5), "Beneish GMI and the margin signals depend on a consistent cost of revenue.")
+    ni_gap = ABS(fin("net_income", L) - (fin("pretax_income", L) - fin("tax", L)))
+    check("chk_ni", f"Net income reconciles to pre-tax income - tax ({labels[L]})", ni_gap, "num2", "<= 10% of |net income| + 0.5",
+          LE(ni_gap, 0.10 * ABS(fin("net_income", L)) + 0.5), "Minority interest and discontinued operations explain small gaps; large ones suggest a mapping problem.")
+    cash_gap = ABS(fin("begin_cash", L) + fin("net_change_cash", L) - fin("end_cash", L))
+    check("chk_cashroll", f"Cash roll-forward: beginning cash + net change = ending cash ({labels[L]})", cash_gap, "num2", "<= 0.5",
+          LE(cash_gap, 0.5), "A broken roll-forward means the cash-flow statement fields come from different bases.")
+    check("chk_plausible", "Plausibility: total liabilities / total assets (also requires current ratio <= 50x)", rat("r_tl_ta", L), "pct", "0% - 300%",
+          AND(GE(rat("r_tl_ta", L), 0), LE(rat("r_tl_ta", L), 3), LE(rat("r_current", L), 50)),
+          "Ratios outside these bounds usually mean mis-scaled or mis-mapped statement items.")
+    check("chk_jumps", "Largest absolute single-period return in the volatility window", float(R.stats.get("max_abs_return", 0.0)), "pct", "<= 40%",
+          LE(K(DQ, "chk_jumps"), 0.40), "A single jump (re-listing, reverse split, data glitch) inflates volatility and every Merton probability.")
+    check("chk_zero_days", "Share of zero-return periods in the volatility window (illiquidity)", float(R.stats.get("zero_share", 0.0)), "pct", "<= 20%",
+          LE(K(DQ, "chk_zero_days"), 0.20), "Many zero-return days understate volatility and flatter the Merton probabilities.")
+    vm = R.stats.get("vol_monthly")
+    if R.stats.get("source") == "daily" and vm:
+        ratio = float(R.stats["vol"]) / float(vm) if vm > 0 else 1.0
+        check("chk_vol_cross", "Daily-based / monthly-based equity volatility", ratio, "factor", "0.5x - 2x", AND(GE(K(DQ, "chk_vol_cross"), 0.5), LE(K(DQ, "chk_vol_cross"), 2)),
+              f"The five-year monthly series gives {vm:.1%}; a large gap between the two estimates means the one-year window is unusual.")
+    check("chk_converged", "Merton solver converged (1 = yes)", 1 if (sol is None or sol.converged) else 0, "int", "= 1", EQ(K(DQ, "chk_converged"), 1),
+          "When the two-equation solve does not converge, rely on the naive distance to default instead of the iterated probabilities.")
+    check("chk_ohlson_units", "Ohlson SIZE input: log10 of total assets in US dollars", LOG10(MAX(fin("total_assets", L) * inp("fx_to_usd") * inp("ta_scale"), 1)), "num1", ">= 6",
+          GE(LOG10(MAX(fin("total_assets", L) * inp("fx_to_usd") * inp("ta_scale"), 1)), 6),
+          "Ohlson's SIZE term needs total assets in dollars (about 1e6 and up); smaller units shift the O-score by 0.94 per factor of ten.")
     dq.blank()
     n_fail: Expr = IF(EQ(K(DQ, check_keys[0]), "FAIL"), 1, 0)
     n_flag: Expr = IF(EQ(K(DQ, check_keys[0]), "FLAG"), 1, 0)
@@ -912,6 +1021,31 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     dq.scalar("n_flag", "Data / applicability flags", n_flag, "int", bold=True)
     dq.scalar("overall_status", "Overall data status",
               IF(GT(K(DQ, "n_fail"), 0), "FAIL - integrity problem", IF(GT(K(DQ, "n_flag"), 0), "REVIEW - flags raised", "PASS - all checks clear")), "text", bold=True)
+    dq.blank()
+    # ---- model applicability (data facts, computed in Python) ----
+    src_L = ds.periods[L].source_fields
+    def reported(k: str) -> bool:
+        v = src_L.get(k, "")
+        return bool(v) and not v.startswith("derived")
+    applicability: List[Dict[str, Any]] = []
+    for model, req, needs_prior, accounting in MODEL_INPUTS:
+        missing = [FIELD_LABELS[k] for k in req if not reported(k)]
+        if accounting and financial:
+            status = "Not applicable: financial institution"
+        elif needs_prior and not has_prior:
+            status = "Not available: needs a prior fiscal year"
+        elif missing:
+            status = "Applicable with gaps: not reported, treated as zero or derived"
+        else:
+            status = "Applicable"
+        applicability.append({"model": model, "status": status, "missing": missing})
+    dq.text("Model applicability and input coverage (latest fiscal year)", "section")
+    hdr(DQ, dq, ["Model", "Status", "Inputs not reported by the source"])
+    for a_ in applicability:
+        book.set(DQ, dq.r, 1, a_["model"], "text", "label", indent=1)
+        book.set(DQ, dq.r, 2, a_["status"], "text", "flag" if not a_["status"].startswith("Applicable") or a_["missing"] else "text")
+        book.set(DQ, dq.r, 3, ", ".join(a_["missing"]) if a_["missing"] else "-", "text", "note")
+        dq.r += 1
     dq.blank()
     dq.text("Formula verification", "section")
     dq.scalar("verification_stamp", "Independent recalculation",
@@ -950,8 +1084,9 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         cv.scalar(None, lab, val, "text", style="text")
     cv.blank()
     cv.text("Key outputs", "section")
-    cv.scalar("cover_score", "Composite default risk score (0-100)", dsh("composite_score"), "num1", bold=True)
-    cv.scalar("cover_grade", "Risk grade", dsh("composite_grade"), "text", bold=True)
+    cv.scalar("cover_score", "Distress signal index (0-100, uncalibrated)", dsh("composite_score"), "num1", bold=True)
+    cv.scalar("cover_grade", "Index band", dsh("composite_grade"), "text", bold=True)
+    cv.scalar("cover_agreement", "Distress models signalling distress", dsh("agreement"), "int")
     cv.scalar("cover_pd", "Merton naive probability of default (1 year)", mer("pd_naive"), "pct2", bold=True)
     cv.scalar("cover_dd", "Distance to default (standard deviations)", mer("dd_naive"), "score")
     cv.scalar("cover_z2", "Altman Z''-score", alt("z2", L), "score")
@@ -996,11 +1131,11 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
     # ---- evaluate everything, then write the narrative --------------------
     errors = book.evaluate_all()
     from .feedback import build_risk_feedback   # local import to avoid a cycle
-    feedback = build_risk_feedback(book, ds, R, L, sol.to_dict() if sol else None, financial)
+    feedback = build_risk_feedback(book, ds, R, L, sol.to_dict() if sol else None, financial, applicability)
     ab = SB(book, ASSESS, [], labels, dates, nh)
     ab.title("Assessment", f"{name} ({sym}) - written summary generated from the model outputs on {generated}")
-    ab.scalar("a_score", "Composite default risk score", dsh("composite_score"), "num1", bold=True)
-    ab.scalar("a_grade", "Risk grade", dsh("composite_grade"), "text", bold=True)
+    ab.scalar("a_score", "Distress signal index (0-100, uncalibrated)", dsh("composite_score"), "num1", bold=True)
+    ab.scalar("a_grade", "Index band", dsh("composite_grade"), "text", bold=True)
     ab.blank()
     for sec in feedback["qualitative"]:
         ab.text(sec["title"], "section")
@@ -1059,6 +1194,14 @@ def build_risk_model(ds: FinancialDataset, inputs: Optional[RiskInputs] = None,
         "tl_ta": num(RAT, "r_tl_ta", L), "debt_to_equity": num(RAT, "r_de", L), "nd_ebitda": num(RAT, "r_nd_ebitda", L), "current_ratio": num(RAT, "r_current", L),
         "quick_ratio": num(RAT, "r_quick", L), "roa": num(RAT, "r_roa", L), "cfo_debt": num(RAT, "r_cfo_debt", L), "runway_years": num(RAT, "r_runway", L),
         "sub_scores": {key: num(DASH, f"{key}_sub") for key, *_ in sig_defs}, "has_prior_year": has_prior,
+        "composite_equal": num(DASH, "composite_equal"), "agreement": num(DASH, "agreement"), "agreement_n": n_vote_models,
+        "pd_naive_rf": num(MER, "pd_naive_rf"), "dd_naive_rf": num(MER, "dd_naive_rf"), "expected_loss": num(MER, "expected_loss"),
+        "pd_cds": num(RTG, "pd_cds"), "interest_estimated_coverage": num(RTG, "coverage_est"), "rating_on_avg_ebit": txt(RTG, "rating_avg3"),
+        "liquidity_coverage_12m": num(RAT, "r_liq12", L),
+        "stress": {"pd_equity_shock": num(MER, "pd_stress_equity"), "pd_vol_shock": num(MER, "pd_stress_vol"), "pd_both": num(MER, "pd_stress_both"),
+                   "z2_ebit_shock": num(ALT, "z2_stress", L), "z2_ebit_zone": txt(ALT, "z2_stress_zone", L),
+                   "equity_shock": R.values["stress_equity"], "vol_shock": R.values["stress_vol"], "ebit_shock": R.values["stress_ebit"]},
+        "applicability": applicability,
         "dq_status": txt(DQ, "overall_status"), "n_fail": num(DQ, "n_fail"), "n_flag": num(DQ, "n_flag"),
         "error_cells": {k: v for k, v in errors.items() if v}, "source": ds.source, "retrieved_at": ds.retrieved_at, "series": series,
         "vol_source": R.stats.get("source"), "n_returns": num(MER, "n_ret"),

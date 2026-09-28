@@ -28,7 +28,7 @@ def _s(x: Any, d: int = 2) -> str:
 
 
 def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int, merton: Optional[Dict[str, Any]],
-                        financial: bool) -> Dict[str, Any]:
+                        financial: bool, applicability: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     labels = book.meta["labels"]
     ccy = ds.profile.currency
     nh = L + 1
@@ -88,8 +88,8 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
 
     sections: List[Dict[str, Any]] = []
     pts: List[str] = []
-    pts.append(f"Composite default risk score of {_n(score, 1)} out of 100 places {ds.profile.name} in the '{grade}' band. "
-               f"{n_votes} of {len(distress_votes)} distress models classify the company as distressed" + (f" ({', '.join(flagged)})." if flagged else "."))
+    pts.append(f"{n_votes} of {len(distress_votes)} distress models classify {ds.profile.name} as distressed" + (f" ({', '.join(flagged)})." if flagged else ".")
+               + f" The distress signal index - an uncalibrated weighted average of the model signals, not a probability - is {_n(score, 1)} out of 100 ('{grade}' band).")
     pts.append(f"Market-implied one-year probability of default (Merton naive distance to default) is {_p(pd_naive, 2)} at {_s(dd_naive)} standard deviations from the default point; "
                f"the accounting-based Ohlson and Zmijewski models put the probability at {_p(o_pd, 1)} and {_p(x_pd, 1)}, and the synthetic rating of {rating} "
                f"corresponds to a historical one-year default rate of {_p(pd1, 2)} ({_p(pd5, 1)} over five years).")
@@ -157,7 +157,7 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
         pts.append(f"Pre-tax income ({ccy} {_n(ebt)}m) exceeds EBIT ({ccy} {_n(ebit)}m) by a wide margin: non-operating gains (asset sales, debt extinguishment, "
                    "fair-value changes) flatter the Springate, Taffler and Ohlson terms that use pre-tax income; judge them on EBIT-based measures.")
     re_, bb, dv = g(FIN, "retained_earnings", L), g(FIN, "buybacks", L), g(FIN, "dividends", L)
-    if re_ is not None and re_ < 0 and ni is not None and ni > 0 and ((bb or 0) + (dv or 0)) < -0.5 * ni:
+    if (re_ is not None and re_ < 0 or te is not None and te <= 0) and ni is not None and ni > 0 and ((bb or 0) + (dv or 0)) < -0.5 * ni:
         pts.append("Retained earnings are negative although the company is profitable and returns more than half of its earnings through buybacks and dividends: "
                    "the deficit reflects capital returned to shareholders, not accumulated losses, yet it lowers the Altman X2 term and therefore every Z-score.")
     sections.append({"title": "Earnings quality", "points": pts})
@@ -193,6 +193,10 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
 
     pts = [f"Data status: {dq_status} ({int(n_fail or 0)} failure(s), {int(n_flag or 0)} flag(s)). Source: {ds.source}; retrieved {ds.retrieved_at[:10]}; "
            f"{nh} fiscal years ({labels[0]} - {labels[L]}); price as of {ds.market.price_date}."]
+    gaps = [a for a in (applicability or []) if a.get("missing")]
+    if gaps:
+        pts.append("Inputs not reported by the source and treated as zero or derived: " +
+                   "; ".join(f"{a['model']}: {', '.join(a['missing'])}" for a in gaps) + ".")
     pts.extend(ds.notes)
     sections.append({"title": "Data quality", "points": pts})
 
@@ -203,7 +207,8 @@ def build_risk_feedback(book: Book, ds: FinancialDataset, R: RiskInputs, L: int,
         "Ohlson O-score (logit), Zmijewski X-score (probit), Springate, Grover and Taffler scores with published coefficients; probabilities via the logistic and standard normal functions.",
         "Merton structural model: naive distance to default per Bharath & Shumway (2008) with the KMV default point (short-term debt + half of long-term debt), and the iterated two-equation solve for asset value and volatility, cross-checked by formulas.",
         "Synthetic rating: Damodaran's interest-coverage tables (large or small firms by market capitalisation) give a rating and default spread; historical average cumulative default rates by rating class from S&P Global.",
-        "Composite score: weighted average of seven sub-scores on a 0-100 scale, weights editable on the Inputs sheet; the Beneish signal is reported separately.",
+        "Distress signal index: uncalibrated weighted average of seven sub-scores on a 0-100 scale (weights editable on the Inputs sheet, equal-weight alternative shown); "
+        "it summarises model agreement and is not a probability of default. The Beneish signal is reported separately.",
         "Every number in the workbook is an Excel formula linked to the blue input cells; the workbook is recalculated independently with LibreOffice and compared cell by cell.",
     ]
     return {"status": dq_status, "n_fail": n_fail, "n_flag": n_flag, "quantitative": quantitative, "qualitative": sections, "methodology": methodology,

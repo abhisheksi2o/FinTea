@@ -15,6 +15,9 @@ from ..providers.base import FinancialDataset, PriceSeries
 from .spec import COMPOSITE_SIGNALS, LARGE_FIRM_MCAP_USD_BN, is_financial
 
 M = 1e6
+# US GNP implicit price deflator rebased to 1968 = 100 (FRED A001RD3A086NBEA, 2017 = 100: 1968 = 18.246), by calendar year.
+# Ohlson uses the index of the year prior to the balance-sheet year.
+GNP_INDEX_1968 = {2017: 548.1, 2018: 561.3, 2019: 571.4, 2020: 577.2, 2021: 603.5, 2022: 646.4, 2023: 670.3, 2024: 686.9, 2025: 706.4}
 
 
 @dataclass(frozen=True)
@@ -42,10 +45,17 @@ RISK_INPUT_SPECS: List[RSpec] = [
     RSpec("default_point_method", "Default point F: 1 = short-term debt + 0.5 x long-term debt (KMV), 2 = total debt, 3 = total liabilities", "Merton model", "int", lo=1, hi=3),
     RSpec("gnp_index", "GNP / GDP price-level index (1968 = 100) for Ohlson SIZE", "Ohlson size variable", "num1", lo=100, hi=5000,
           help="Ohlson deflated total assets by the GNP price-level index with 1968 = 100."),
-    RSpec("ta_scale", "Total assets unit multiplier for Ohlson SIZE (1,000 = USD thousands)", "Ohlson size variable", "num", lo=1, hi=1e6,
-          help="Ohlson's sample reported total assets in thousands of dollars; 1,000 converts USD millions to thousands."),
+    RSpec("ta_scale", "Total assets unit multiplier for Ohlson SIZE (1,000,000 = USD millions to dollars)", "Ohlson size variable", "num", lo=1, hi=1e6,
+          help="Ohlson (1980) deflated total assets in dollars by the GNP price-level index; 1,000,000 converts USD millions to dollars."),
     RSpec("rating_table", "Interest-coverage rating table: 1 = auto by market cap, 2 = large firms, 3 = small firms", "Synthetic rating", "int", lo=1, hi=3),
     RSpec("large_firm_threshold", "Large-firm threshold (market cap, USD billions)", "Synthetic rating", "num1", lo=0.1, hi=1000),
+    RSpec("interest_fallback", "When interest expense is not reported: 1 = Altman EM-score rating, 2 = coverage on estimated interest (debt x (risk-free + BBB spread))",
+          "Synthetic rating", "int", lo=1, hi=2),
+    RSpec("cds_spread", "CDS or bond credit spread if you have a market quote (decimal, 0 = none)", "Market-quoted credit (optional)", "pct2", lo=0, hi=1),
+    RSpec("recovery_rate", "Assumed recovery rate on default (loss given default = 1 - recovery)", "Market-quoted credit (optional)", "pct", lo=0, hi=0.95),
+    RSpec("stress_equity", "Stress: change in market equity", "Stress test", "pct", lo=-0.95, hi=2),
+    RSpec("stress_vol", "Stress: change in equity volatility", "Stress test", "pct", lo=-0.9, hi=5),
+    RSpec("stress_ebit", "Stress: change in EBIT", "Stress test", "pct", lo=-3, hi=3),
 ] + [RSpec(s.key, f"Weight: {s.label}", "Composite score weights", "pct", lo=0, hi=1, help=s.how) for s in COMPOSITE_SIGNALS]
 RSPEC_BY_KEY = {s.key: s for s in RISK_INPUT_SPECS}
 
@@ -77,28 +87,32 @@ def _log_returns(closes: List[float]) -> List[float]:
 def equity_statistics(ds: FinancialDataset) -> Dict[str, Any]:
     """Annualised equity volatility and trailing 12-month return from the best available price series."""
     daily: Optional[PriceSeries] = ds.daily_prices
+    def sample_vol(rets: List[float], periods: float) -> Optional[float]:
+        n = len(rets)
+        if n < 2:
+            return None
+        mean = sum(rets) / n
+        var = sum((x - mean) ** 2 for x in rets) / (n - 1)
+        return math.sqrt(var) * math.sqrt(periods)
+
+    m = ds.stock_prices
+    m_rets = _log_returns(m.closes)
+    vol_monthly = sample_vol(m_rets, 12.0)
     if daily is not None and len(daily.closes) >= 30:
         rets = _log_returns(daily.closes)
-        n = len(rets)
-        mean = sum(rets) / n
-        var = sum((x - mean) ** 2 for x in rets) / (n - 1)
-        vol = math.sqrt(var) * math.sqrt(252.0)
+        vol = sample_vol(rets, 252.0) or 0.40
         ret12 = daily.closes[-1] / daily.closes[0] - 1.0
-        return {"vol": vol, "return_12m": ret12, "n_obs": n, "source": "daily",
-                "start": daily.dates[0], "end": daily.dates[-1], "annualisation": 252}
-    m = ds.stock_prices
-    rets = _log_returns(m.closes)
-    n = len(rets)
-    if n >= 2:
-        mean = sum(rets) / n
-        var = sum((x - mean) ** 2 for x in rets) / (n - 1)
-        vol = math.sqrt(var) * math.sqrt(12.0)
-    else:
-        vol = 0.40
+        return {"vol": vol, "return_12m": ret12, "n_obs": len(rets), "source": "daily",
+                "start": daily.dates[0], "end": daily.dates[-1], "annualisation": 252,
+                "max_abs_return": max(abs(x) for x in rets), "zero_share": sum(1 for x in rets if abs(x) < 1e-12) / len(rets),
+                "vol_monthly": vol_monthly}
+    vol = vol_monthly or 0.40
     k = min(12, len(m.closes) - 1)
     ret12 = (m.closes[-1] / m.closes[-1 - k] - 1.0) if k >= 1 and m.closes[-1 - k] > 0 else 0.0
-    return {"vol": vol, "return_12m": ret12, "n_obs": n, "source": "monthly" if n >= 2 else "default",
-            "start": m.dates[0] if m.dates else "", "end": m.dates[-1] if m.dates else "", "annualisation": 12}
+    return {"vol": vol, "return_12m": ret12, "n_obs": len(m_rets), "source": "monthly" if vol_monthly else "default",
+            "start": m.dates[0] if m.dates else "", "end": m.dates[-1] if m.dates else "", "annualisation": 12,
+            "max_abs_return": max((abs(x) for x in m_rets), default=0.0), "zero_share": (sum(1 for x in m_rets if abs(x) < 1e-12) / len(m_rets)) if m_rets else 0.0,
+            "vol_monthly": vol_monthly}
 
 
 def derive_inputs(ds: FinancialDataset, overrides: Optional[Dict[str, Any]] = None) -> RiskInputs:
@@ -144,12 +158,13 @@ def derive_inputs(ds: FinancialDataset, overrides: Optional[Dict[str, Any]] = No
     V["default_point_method"] = 1
     B["default_point_method"] = ("Moody's KMV default point: debt due within a year plus half of long-term debt (Crosbie & Bohn 2003; Bharath & Shumway 2008). "
                                  "Total liabilities is the conservative alternative.")
-    V["gnp_index"] = 640.0
-    B["gnp_index"] = ("US GDP implicit price deflator, 2025 relative to 1968 = 100 (BEA NIPA Table 1.1.9: about 128.9 vs 20.1 on the 2017 = 100 base), "
-                      "i.e. prices are roughly 6.4x the 1968 level. Ohlson deflated total assets by the GNP price-level index with 1968 = 100.")
-    V["ta_scale"] = 1000.0
-    B["ta_scale"] = ("Ohlson's Compustat sample carried total assets in thousands of US dollars, so USD millions are multiplied by 1,000 before "
-                     "taking the natural log. Set to 1 to use USD millions (the SIZE term then shifts by ln(1000) x 0.407 = 2.81 points of O).")
+    idx_year = max(min(fy - 1, max(GNP_INDEX_1968)), min(GNP_INDEX_1968))
+    V["gnp_index"] = GNP_INDEX_1968[idx_year]
+    B["gnp_index"] = (f"US GNP implicit price deflator for {idx_year} rebased to 1968 = 100 (FRED series A001RD3A086NBEA: {idx_year} = {GNP_INDEX_1968[idx_year]:.1f}). "
+                      "Ohlson (1980) deflates total assets by the GNP price-level index of the year before the balance-sheet year.")
+    V["ta_scale"] = 1000000.0
+    B["ta_scale"] = ("Ohlson (1980): 'total assets are as reported in dollars', deflated by the GNP price-level index (1968 = 100). USD millions are "
+                     "multiplied by 1,000,000 before taking the natural log; every factor of 10 in the units moves O by 0.407 x ln(10) = 0.94.")
     mcap_usd_bn = V["price"] * V["shares_outstanding"] * V["fx_to_usd"] / 1e3
     R.stats["market_cap_usd_bn"] = mcap_usd_bn
     V["rating_table"] = 1
@@ -157,6 +172,19 @@ def derive_inputs(ds: FinancialDataset, overrides: Optional[Dict[str, Any]] = No
                          f"{'large' if mcap_usd_bn > LARGE_FIRM_MCAP_USD_BN else 'small'}-firm table (Damodaran uses USD 5bn as the split).")
     V["large_firm_threshold"] = LARGE_FIRM_MCAP_USD_BN
     B["large_firm_threshold"] = "Damodaran's split between the large-firm and small/riskier-firm coverage tables."
+    V["interest_fallback"] = 1
+    B["interest_fallback"] = ("Yahoo omits interest expense for some issuers; option 2 imputes it as average total debt x (risk-free + BBB spread) and rates the "
+                              "resulting coverage, option 1 uses the Altman EM-score bond-rating equivalent.")
+    V["cds_spread"] = 0.0
+    B["cds_spread"] = "Optional: enter a CDS or bond spread (e.g. 0.025 for 250bp) to add a market-quoted default probability = spread / (1 - recovery)."
+    V["recovery_rate"] = 0.40
+    B["recovery_rate"] = "40% is the conventional senior unsecured recovery assumption (Moody's long-run average for senior unsecured bonds is about 37-40%)."
+    V["stress_equity"] = -0.30
+    B["stress_equity"] = "Stress scenario: market equity falls 30%."
+    V["stress_vol"] = 0.50
+    B["stress_vol"] = "Stress scenario: equity volatility rises 50%."
+    V["stress_ebit"] = -0.25
+    B["stress_ebit"] = "Stress scenario: EBIT falls 25% (applied to the Altman Z'' EBIT term)."
     financial = is_financial(ds.profile.sector, ds.profile.industry)
     R.stats["financial"] = financial
     for s in COMPOSITE_SIGNALS:
