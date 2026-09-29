@@ -346,6 +346,22 @@ class YahooProvider(DataProvider):
                 "label": f"LTM {q[-1][:7]}"}
         return FiscalPeriod(period_end=q[-1], fields=fields, source_fields=src), meta
 
+    def _market_cap(self, symbol: str) -> Optional[float]:
+        """Yahoo's own market capitalisation (listing currency, major units): the trailing figure, else the latest quarterly one."""
+        now = int(time.time())
+        try:
+            js = self._get(f"/ws/fundamentals-timeseries/v1/finance/timeseries/{requests.utils.quote(symbol)}",
+                           {"type": "trailingMarketCap,quarterlyMarketCap", "period1": now - 400 * 86400, "period2": now + 86400, "merge": "false"})
+        except ProviderError:
+            return None
+        found: Dict[str, float] = {}
+        for res in js.get("timeseries", {}).get("result") or []:
+            t = res["meta"]["type"][0]
+            vals = [v["reportedValue"]["raw"] for v in (res.get(t) or []) if v and v.get("reportedValue") and v["reportedValue"].get("raw")]
+            if vals:
+                found[t] = float(vals[-1])
+        return found.get("trailingMarketCap") or found.get("quarterlyMarketCap")
+
     def _fx_rate(self, from_ccy: str, to_ccy: str) -> Optional[float]:
         """Spot rate: 1 unit of from_ccy in to_ccy, via Yahoo FX quotes (tries both pair orders)."""
         if from_ccy == to_ccy:
@@ -419,6 +435,8 @@ class YahooProvider(DataProvider):
             notes.append(f"Share price quoted in {listing_ccy} (minor units): {listing_price:,.2f} {listing_ccy} = {listing_price / div:,.2f} {major}.")
             price, listing_ccy = price / div, major
             hi, lo = (hi / div if hi else hi), (lo / div if lo else lo)
+        source_mcap = self._market_cap(symbol)                    # independent check on the share count (splits, share classes, units)
+        implied_shares = (source_mcap / price) if (source_mcap and price > 0) else None
         currency = stmt_ccy or listing_ccy
         fx = None
         if currency != listing_ccy:
@@ -442,7 +460,8 @@ class YahooProvider(DataProvider):
                                 shares_outstanding=float(shares), currency=currency,
                                 fifty_two_week_high=hi, fifty_two_week_low=lo,
                                 risk_free_rate=rf, risk_free_source=rf_src, index_symbol=idx_sym, index_name=idx_name,
-                                listing_currency=listing_ccy, listing_price=listing_price, fx_rate=fx, fx_to_usd=fx_usd)
+                                listing_currency=listing_ccy, listing_price=listing_price, fx_rate=fx, fx_to_usd=fx_usd,
+                                source_market_cap=source_mcap, source_implied_shares=implied_shares)
         if rf is None:
             notes.append("Risk-free rate could not be retrieved; a default of 4.0% is used - override in Assumptions.")
         if idx_sym != "^GSPC":

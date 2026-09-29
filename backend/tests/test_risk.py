@@ -293,6 +293,41 @@ def test_debt_free_company_has_no_error_cells_and_rates_aaa():
     assert s["debt_free"] is True and s["interest_coverage"] is None        # the 100,000 sentinel never reaches the summary
 
 
+def test_share_counts_arbitrated_by_the_market_capitalisation():
+    """With the source's own market cap: a quarter-summed diluted series (Digital Realty) is corrected, a genuine 4x issuance
+    (Brookfield Asset Management) is left alone, and a split after the balance-sheet date rescales the history."""
+    from fintea.providers import get_provider, normalize
+    # Digital Realty pattern: diluted 4x too high in every year, EPS 4x too low, shares outstanding right
+    raw = get_provider("sample").fetch("MSFT")
+    so = raw.periods[-1].fields["shares_outstanding"]
+    for per in raw.periods:
+        per.fields["diluted_shares"] *= 4
+        per.fields["diluted_eps"] /= 4
+    raw.market.source_implied_shares = so * 1.1
+    ds = normalize(raw)
+    for per in ds.periods:
+        assert abs(per.fields["diluted_shares"] / per.fields["shares_outstanding"] - 1) < 0.2
+    assert ds.market.shares_outstanding == pytest.approx(so)
+    # Brookfield pattern: the latest year has 4x the shares of earlier years and both fields agree; the market agrees too
+    raw = get_provider("sample").fetch("MSFT")
+    last = raw.periods[-1]
+    last.fields["shares_outstanding"] *= 4; last.fields["diluted_shares"] *= 4
+    raw.market.shares_outstanding = last.fields["shares_outstanding"]
+    raw.market.source_implied_shares = last.fields["shares_outstanding"] * 1.02
+    before = {p.period_end: (p.fields["shares_outstanding"], p.fields["diluted_shares"]) for p in raw.periods}
+    ds = normalize(raw)
+    assert {p.period_end: (p.fields["shares_outstanding"], p.fields["diluted_shares"]) for p in ds.periods} == before
+    assert not any("Share count" in n for n in ds.notes)
+    # split after the balance-sheet date: the market implies 15x the statements' count
+    raw = get_provider("sample").fetch("MSFT")
+    so = raw.periods[-1].fields["shares_outstanding"]; eps = raw.periods[-1].fields["diluted_eps"]
+    raw.market.source_implied_shares = so * 15
+    ds = normalize(raw)
+    assert ds.market.shares_outstanding == pytest.approx(so * 15)
+    assert ds.periods[-1].fields["shares_outstanding"] == pytest.approx(so * 15) and ds.periods[-1].fields["diluted_eps"] == pytest.approx(eps / 15)
+    assert any("split" in n for n in ds.notes)
+
+
 def test_share_counts_in_a_different_class_or_unit_are_reconciled():
     """Yahoo sometimes reports shares outstanding in another share class (Berkshire A vs B, ASX CDIs) or 1,000x off (CME)."""
     from fintea.providers import get_provider, normalize
