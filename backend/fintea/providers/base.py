@@ -90,6 +90,8 @@ class MarketSnapshot:
     fx_to_usd: Optional[float] = None            # 1 unit of the reporting currency in USD (for size variables)
     source_market_cap: Optional[float] = None    # the data source's own market capitalisation, listing currency (major units)
     source_implied_shares: Optional[float] = None  # source market cap / quoted price: a share count independent of the statements
+    split_factor: float = 1.0                    # product of split ratios recorded after the latest balance-sheet date (1.0 = none)
+    splits: List[Dict[str, Any]] = field(default_factory=list)   # those split events: {"date", "ratio", "text"}
 
     @property
     def market_cap(self) -> float:

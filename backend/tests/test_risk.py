@@ -318,14 +318,24 @@ def test_share_counts_arbitrated_by_the_market_capitalisation():
     ds = normalize(raw)
     assert {p.period_end: (p.fields["shares_outstanding"], p.fields["diluted_shares"]) for p in ds.periods} == before
     assert not any("Share count" in n for n in ds.notes)
-    # split after the balance-sheet date: the market implies 15x the statements' count
+    # a recorded 15:1 split after the balance-sheet date rescales the history to the split-adjusted price series
     raw = get_provider("sample").fetch("MSFT")
     so = raw.periods[-1].fields["shares_outstanding"]; eps = raw.periods[-1].fields["diluted_eps"]
-    raw.market.source_implied_shares = so * 15
+    raw.market.split_factor = 15.0
+    raw.market.splits = [{"date": "2026-09-01", "ratio": 15.0, "text": "15:1"}]
     ds = normalize(raw)
     assert ds.market.shares_outstanding == pytest.approx(so * 15)
     assert ds.periods[-1].fields["shares_outstanding"] == pytest.approx(so * 15) and ds.periods[-1].fields["diluted_eps"] == pytest.approx(eps / 15)
-    assert any("split" in n for n in ds.notes)
+    assert any("Share count adjusted for a split" in n for n in ds.notes)
+    # a market capitalisation 15x the statements WITHOUT a recorded split is only noted, never applied (Merck, Aozora Bank)
+    raw = get_provider("sample").fetch("MSFT")
+    so = raw.periods[-1].fields["shares_outstanding"]
+    raw.market.source_implied_shares = so * 15
+    ds = normalize(raw)
+    assert ds.market.shares_outstanding == pytest.approx(so) and ds.periods[-1].fields["shares_outstanding"] == pytest.approx(so)
+    assert any(n.startswith("Share count check") for n in ds.notes)
+    r = build_risk_model(ds)
+    assert "Share count check" in r.inputs.basis["shares_outstanding"]
 
 
 def test_share_counts_in_a_different_class_or_unit_are_reconciled():
