@@ -1,6 +1,7 @@
 """Fill gaps in provider data using accounting identities, recording every fix."""
 from __future__ import annotations
 
+import math
 import statistics
 from typing import List
 
@@ -19,75 +20,75 @@ def _set(p: FiscalPeriod, k: str, v: float, how: str, log: List[str]):
     log.append(f"{p.period_end[:4]}: {k} derived as {how}")
 
 
-def _within(a: float, b: float) -> bool:
-    return a > 0 and b > 0 and a / b <= SHARE_RATIO_LIMIT and b / a <= SHARE_RATIO_LIMIT
+def _within(a: float, b: float, limit: float = SHARE_RATIO_LIMIT) -> bool:
+    return a > 0 and b > 0 and a / b <= limit and b / a <= limit
+
+
+def _closer(a: float, b: float, ref: float) -> float:
+    return a if abs(math.log(a / ref)) <= abs(math.log(b / ref)) else b
 
 
 def _reconcile_share_counts(ds: FinancialDataset, log: List[str]) -> None:
-    """Yahoo's share counts are sometimes wrong by a share class or a unit: shares outstanding in another class from the
+    """Share counts from the source can be wrong by a share class or a unit: shares outstanding in another class from the
     quoted price (Berkshire Class A count with the Class B quote, ASX CDIs at 10 per share) or 1,000x off (CME, Emerald
-    Resources), single mis-scaled years of the diluted series (DENSO), or a whole diluted series in the wrong unit
-    (Law Debenture). No single field can be trusted, so the reference is a majority of three independent signals: the
-    median of the shares-outstanding series, the median of the diluted weighted-average series, and the median of
-    net income / diluted EPS (the count in the class EPS is quoted in). With all three the median of the three wins;
-    with two that agree their mean; with two that disagree there is no cross-check and only single-year outliers
-    within each series are repaired. Every replacement is logged."""
+    Resources), a diluted series summed over quarters (Digital Realty, FirstEnergy), or a whole diluted series in the
+    wrong unit (Law Debenture). Genuine step changes (Brookfield Asset Management's and Sigma Healthcare's 4x issuances)
+    look the same from the statements alone, so nothing is changed unless the two fields of the SAME period disagree by
+    more than SHARE_RATIO_LIMIT; then the count the source's own market capitalisation implies (market cap / price, an
+    independent figure) decides, or, without it, the median of the years in which the two fields agree. Finally the
+    current share count is compared with the market-implied one: a gap of 1.5x or more means a split, bonus issue,
+    consolidation or a large issuance after the balance-sheet date, so the market's count is used and the history is
+    put on the same basis as the split-adjusted price series. Every replacement is logged."""
     periods = list(ds.periods) + ([ds.ltm] if ds.ltm is not None else [])
-    so_series = [p.fields.get("shares_outstanding") for p in ds.periods if (p.fields.get("shares_outstanding") or 0) > 0]
-    dil_series = [p.fields.get("diluted_shares") for p in ds.periods if (p.fields.get("diluted_shares") or 0) > 0]
-    eps_series = []
-    for p in ds.periods:
-        ni, eps = p.fields.get("net_income"), p.fields.get("diluted_eps")
-        if ni is not None and eps is not None and abs(eps) > 1e-9 and abs(ni) > 0:
-            eps_series.append(abs(ni / eps))
-    so_med = float(statistics.median(so_series)) if so_series else None
-    dil_med = float(statistics.median(dil_series)) if dil_series else None
-    eps_med = float(statistics.median(eps_series)) if eps_series else None
-    cands = [x for x in (so_med, dil_med, eps_med) if x]
-    ref: float | None
-    if len(cands) == 3:
-        ref = float(statistics.median(cands))                       # majority of three
-    elif len(cands) == 2 and _within(cands[0], cands[1]):
-        ref = (cands[0] * cands[1]) ** 0.5
-    elif len(cands) == 1:
-        ref = cands[0]
-    else:
-        ref = None                                                   # two signals that disagree: no cross-check possible
-    if ref is None:
-        # repair single-year outliers within each series only
-        for key, med in (("shares_outstanding", so_med), ("diluted_shares", dil_med)):
-            if not med:
-                continue
-            for per in periods:
-                v = per.fields.get(key)
-                if v is not None and v > 0 and not _within(v, med):
-                    _set(per, key, med, f"reported {key.replace('_', ' ')} ({v / 1e6:,.1f}m) are more than {SHARE_RATIO_LIMIT:.0f}x away "
-                         f"from the {med / 1e6:,.1f}m median of the series; replaced", log)
-        m = ds.market
-        if so_med and m.shares_outstanding and not _within(m.shares_outstanding, so_med):
-            old = m.shares_outstanding
-            m.shares_outstanding = float(periods[-1].fields.get("shares_outstanding") or so_med)
-            ds.notes.append(f"Share count reconciled: the market share count ({old / 1e6:,.1f}m) is more than {SHARE_RATIO_LIMIT:.0f}x away from "
-                            f"the reported series ({so_med / 1e6:,.1f}m median); {m.shares_outstanding / 1e6:,.1f}m shares are used for the market capitalisation.")
-        return
+    m = ds.market
+    ref = float(m.source_implied_shares) if (m.source_implied_shares or 0) > 0 else None
+    stmt = [v for p in periods for v in (p.fields.get("shares_outstanding"), p.fields.get("diluted_shares")) if v and v > 0]
+    if ref is not None and stmt and not any(_within(ref, v, 20.0) for v in stmt):
+        ref = None                                                   # the source figure is not even in the same universe: ignore it
+    agreed = [p.fields["shares_outstanding"] for p in periods
+              if (p.fields.get("shares_outstanding") or 0) > 0 and (p.fields.get("diluted_shares") or 0) > 0
+              and _within(p.fields["shares_outstanding"], p.fields["diluted_shares"])]
+    anchor = ref if ref is not None else (float(statistics.median(agreed)) if agreed else None)
     for per in periods:
         f = per.fields
-        for key, other in (("diluted_shares", "shares_outstanding"), ("shares_outstanding", "diluted_shares")):
-            v = f.get(key)
-            if v is not None and v > 0 and not _within(v, ref):
-                alt = f.get(other)
-                new = float(alt) if (alt and _within(alt, ref)) else ref
-                _set(per, key, new, f"reported {key.replace('_', ' ')} ({v / 1e6:,.1f}m) are in a different share class or unit than the "
-                     f"{ref / 1e6:,.1f}m reference (majority of shares outstanding, diluted shares and net income / EPS); replaced by {new / 1e6:,.1f}m", log)
-    m = ds.market
-    if m.shares_outstanding and not _within(m.shares_outstanding, ref):
-        last = periods[-1].fields
-        new = float(last.get("shares_outstanding") or last.get("diluted_shares") or ref)
+        so, dil = f.get("shares_outstanding"), f.get("diluted_shares")
+        if not (so and dil and so > 0 and dil > 0) or _within(so, dil) or anchor is None:
+            continue
+        keep = _closer(so, dil, anchor)
+        why = ("the count implied by the source's market capitalisation" if ref is not None else "the years in which both counts agree")
+        if keep == so:
+            _set(per, "diluted_shares", float(so), f"reported diluted shares ({dil / 1e6:,.1f}m) and shares outstanding ({so / 1e6:,.1f}m) are more than "
+                 f"{SHARE_RATIO_LIMIT:.0f}x apart; shares outstanding kept because they match {why}", log)
+        else:
+            _set(per, "shares_outstanding", float(dil), f"reported shares outstanding ({so / 1e6:,.1f}m) and diluted shares ({dil / 1e6:,.1f}m) are more than "
+                 f"{SHARE_RATIO_LIMIT:.0f}x apart; the diluted count kept because it matches {why}", log)
+        basic = f.get("basic_shares")
+        if basic and basic > 0 and not _within(basic, keep):
+            _set(per, "basic_shares", float(keep), "basic shares replaced by the reconciled count", log)
+    latest = periods[-1].fields
+    latest_count = latest.get("shares_outstanding") or latest.get("diluted_shares")
+    if m.shares_outstanding and latest_count and not _within(m.shares_outstanding, latest_count):
         old = m.shares_outstanding
-        m.shares_outstanding = new
-        ds.notes.append(f"Share count reconciled: the source's shares outstanding ({old / 1e6:,.1f}m) are more than {SHARE_RATIO_LIMIT:.0f}x away from "
-                        f"the {ref / 1e6:,.1f}m reference (majority of the shares-outstanding series, the diluted-share series and net income / EPS), "
-                        f"which means a different share class or unit; {new / 1e6:,.1f}m shares (the class of the quoted price) are used for the market capitalisation.")
+        m.shares_outstanding = float(latest_count)
+        ds.notes.append(f"Share count reconciled: the market share count ({old / 1e6:,.1f}m) was in a different share class or unit than the "
+                        f"statements; {m.shares_outstanding / 1e6:,.1f}m shares are used for the market capitalisation.")
+    if ref is not None and m.shares_outstanding and (ref / m.shares_outstanding >= 1.5 or m.shares_outstanding / ref >= 1.5):
+        k = ref / m.shares_outstanding
+        for per in periods:
+            for key in ("shares_outstanding", "diluted_shares", "basic_shares"):
+                v = per.fields.get(key)
+                if v and v > 0:
+                    per.fields[key] = v * k
+            eps = per.fields.get("diluted_eps")
+            if eps is not None:
+                per.fields["diluted_eps"] = eps / k
+        old = m.shares_outstanding
+        m.shares_outstanding = ref
+        ds.notes.append(f"Share count adjusted: the statements' latest count ({old / 1e6:,.1f}m) is {k:.2f}x away from the count implied by the source's "
+                        f"market capitalisation ({ref / 1e6:,.1f}m), which points to a split, bonus issue, consolidation or large issuance after the "
+                        f"balance-sheet date; the market's count is used and all share counts and per-share figures were scaled by {k:.2f} so the "
+                        f"history matches the split-adjusted price series.")
+        log.append(f"all periods: share counts scaled by {k:.2f} to the market's current share count")
 
 
 def normalize(ds: FinancialDataset) -> FinancialDataset:

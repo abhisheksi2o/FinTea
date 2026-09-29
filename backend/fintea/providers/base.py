@@ -88,6 +88,8 @@ class MarketSnapshot:
     listing_price: Optional[float] = None        # quoted price in the listing currency
     fx_rate: Optional[float] = None              # listing -> reporting currency rate applied to the price
     fx_to_usd: Optional[float] = None            # 1 unit of the reporting currency in USD (for size variables)
+    source_market_cap: Optional[float] = None    # the data source's own market capitalisation, listing currency (major units)
+    source_implied_shares: Optional[float] = None  # source market cap / quoted price: a share count independent of the statements
 
     @property
     def market_cap(self) -> float:

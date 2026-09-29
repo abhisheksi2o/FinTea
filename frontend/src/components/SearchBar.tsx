@@ -253,7 +253,7 @@ export function SearchBar({ providers, provider, setProvider, years, setYears, b
                   );
                 })}
               </ul>
-              <div className="sug-foot"><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate &nbsp; <kbd>Enter</kbd> {searching ? "select or search as typed" : "select"} &nbsp; <kbd>Esc</kbd> close</div>
+              <div className="sug-foot"><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate &nbsp; <kbd>Enter</kbd> {searching && !staticMode ? "select or search as typed" : "select"} &nbsp; <kbd>Esc</kbd> close</div>
             </div>
           )}
         </div>
