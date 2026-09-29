@@ -12,7 +12,7 @@ ignores proxy CA bundles). Endpoints used:
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -346,6 +346,23 @@ class YahooProvider(DataProvider):
                 "label": f"LTM {q[-1][:7]}"}
         return FiscalPeriod(period_end=q[-1], fields=fields, source_fields=src), meta
 
+    def _splits(self, symbol: str) -> List[Dict[str, Any]]:
+        """Split and consolidation events recorded in the price history (the chart endpoint returns them with the prices)."""
+        try:
+            ev = self._chart(symbol, "2y", "1mo").get("events", {}).get("splits", {}) or {}
+        except ProviderError:
+            return []
+        out: List[Dict[str, Any]] = []
+        for v in ev.values():
+            try:
+                num, den = float(v.get("numerator") or 0), float(v.get("denominator") or 0)
+                if num > 0 and den > 0:
+                    out.append({"date": datetime.fromtimestamp(int(v["date"]), tz=timezone.utc).strftime("%Y-%m-%d"),
+                                "ratio": num / den, "text": str(v.get("splitRatio") or f"{num:g}:{den:g}")})
+            except (TypeError, ValueError, KeyError):
+                continue
+        return sorted(out, key=lambda x: x["date"])
+
     def _market_cap(self, symbol: str) -> Optional[float]:
         """Yahoo's own market capitalisation (listing currency, major units): the trailing figure, else the latest quarterly one."""
         now = int(time.time())
@@ -456,12 +473,20 @@ class YahooProvider(DataProvider):
                                  exchange=meta.get("fullExchangeName") or meta.get("exchangeName") or "",
                                  currency=currency, fiscal_year_end_month=int(last.period_end[5:7]),
                                  sector=(info.sector if info else ""), industry=(info.industry if info else ""))
+        # splits after the latest balance sheet: the statements' share counts are pre-split while the quote is post-split
+        balance_date = (ltm_meta.get("balance_date") or ltm.period_end) if ltm is not None else last.period_end
+        cutoff = (datetime.strptime(price_date, "%Y-%m-%d") + timedelta(days=3)).strftime("%Y-%m-%d")
+        splits_after = [sp for sp in self._splits(symbol) if str(balance_date) < sp["date"] <= cutoff]
+        split_factor = 1.0
+        for sp in splits_after:
+            split_factor *= sp["ratio"]
         market = MarketSnapshot(price=price, price_date=price_date,
                                 shares_outstanding=float(shares), currency=currency,
                                 fifty_two_week_high=hi, fifty_two_week_low=lo,
                                 risk_free_rate=rf, risk_free_source=rf_src, index_symbol=idx_sym, index_name=idx_name,
                                 listing_currency=listing_ccy, listing_price=listing_price, fx_rate=fx, fx_to_usd=fx_usd,
-                                source_market_cap=source_mcap, source_implied_shares=implied_shares)
+                                source_market_cap=source_mcap, source_implied_shares=implied_shares,
+                                split_factor=split_factor, splits=splits_after)
         if rf is None:
             notes.append("Risk-free rate could not be retrieved; a default of 4.0% is used - override in Assumptions.")
         if idx_sym != "^GSPC":

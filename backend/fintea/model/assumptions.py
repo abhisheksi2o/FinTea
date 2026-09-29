@@ -140,7 +140,9 @@ def derive_assumptions(ds: FinancialDataset, years: int = 5,
         B["price"] += (f" Quoted {ds.market.listing_price:,.2f} {ds.market.listing_currency}, converted to the reporting currency "
                        f"at {ds.market.fx_rate:,.4f}.")
     V["shares_outstanding"] = float(ds.market.shares_outstanding) / M
-    B["shares_outstanding"] = f"Shares outstanding at the latest balance-sheet date (FY{fy[L]}) reported by the source."
+    share_notes = [n for n in ds.notes if n.startswith("Share count")]
+    B["shares_outstanding"] = f"Shares outstanding at the latest balance-sheet date (FY{fy[L]}) reported by the source." + \
+        (" " + " ".join(share_notes) if share_notes else "")
     rf = ds.market.risk_free_rate if ds.market.risk_free_rate is not None else 0.04
     V["risk_free"] = round(float(rf), 5)
     B["risk_free"] = ds.market.risk_free_source or "Default 4.0% (source did not provide a treasury yield)."
