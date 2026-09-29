@@ -56,7 +56,8 @@ export function AssumptionsPanel({ items, years, labels, busy, onRebuild, static
                   <td className="asm-label">{it.label}{it.help && <div className="help">{it.help}</div>}</td>
                   <td className="asm-inputs">
                     {it.kind === "scalar" ? (
-                      <span className="inp"><input type="number" step="any" value={toDisplay(current(it) as number, it.fmt)} onChange={(e) => setScalar(it, e.target.value)} />{unit(it.fmt)}</span>
+                      <span className="inp"><input type="number" step="any" value={toDisplay(current(it) as number, it.fmt)} onChange={(e) => setScalar(it, e.target.value)}
+                        disabled={!!staticMode && it.key === "projection_years"} title={staticMode && it.key === "projection_years" ? "Changing the horizon needs a live build" : undefined} />{unit(it.fmt)}</span>
                     ) : (
                       <div className="vec">
                         {(current(it) as number[]).slice(0, yrs).map((v, j) => (
